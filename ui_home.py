@@ -8,15 +8,11 @@ from pathlib import Path
 from nicegui import ui
 from loguru import logger
 
-from core_manager import CoreManager
+from core_manager import core_manager
 from config_manager import config_manager
 from system_info import system_info
 from utils import create_file_browser_button
 from core_status import update_core_status, get_core_status
-
-# 创建全局实例
-core_manager = CoreManager()
-
 
 def create_home_page():
     """创建主页UI组件"""
@@ -48,6 +44,13 @@ def create_home_page():
     
     # 核心运行状态显示
     core_running_status = ui.label('').style('margin-top: 10px; font-weight: bold')
+    
+    # 显示FFmpeg内置状态
+    ffmpeg_path = config_manager.get_ffmpeg_path()
+    ffmpeg_exists = Path(ffmpeg_path).exists() if ffmpeg_path else False
+    ffmpeg_status = ui.label('')
+    ffmpeg_status.set_text(f'FFmpeg: {ffmpeg_path} (已内置)' if ffmpeg_exists else f'FFmpeg: {ffmpeg_path} (未找到)')
+    ffmpeg_status.style('font-size: 12px; color: green' if ffmpeg_exists else 'font-size: 12px; color: red')
     
     # 详细信息展开区域
     details_expansion = ui.expansion('详细信息', icon='info').style('margin-top: 10px')

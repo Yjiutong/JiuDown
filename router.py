@@ -9,6 +9,7 @@ from loguru import logger
 from ui_home import create_home_page
 from ui_settings import create_settings_page
 from ui_log import create_log_page
+from ui_download import create_download_page
 
 
 class Router:
@@ -28,6 +29,12 @@ class Router:
                 'icon': 'list_alt',
                 'component': create_log_page,
                 'description': '核心运行日志查看'
+            },
+            '/download': {
+                'name': '下载',
+                'icon': 'download',
+                'component': create_download_page,
+                'description': 'B站视频下载'
             },
             '/settings': {
                 'name': '设置',

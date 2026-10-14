@@ -41,7 +41,7 @@ class ConfigManager:
         },
         'ffmpeg_path': {
             'path': 'download-task.ffmpeg-path',
-            'default': lambda: find_executable('ffmpeg') or '',
+            'default': lambda: system_info.get_default_paths()['ffmpeg_path'],
             'description': 'FFmpeg路径'
         },
         'log_level': {
@@ -60,8 +60,22 @@ class ConfigManager:
         'download_speed_limit': {
             'path': 'download-task.download-speed-limit',
             'default': 0,
-            'validator': lambda x: 0 <= x <= 1048576,
+            'validator': lambda x: 0 <= x <= 1073741824,
             'description': '下载速度限制'
+        },
+        'default_quality': {
+            'path': 'download-task.quality',
+            'default': '720P',
+            'validator': lambda x: x in ['360P', '480P', '720P', '1080P'],
+            'normalizer': lambda x: x if x in ['360P', '480P', '720P', '1080P'] else '720P',
+            'description': '默认清晰度'
+        },
+        'default_format': {
+            'path': 'download-task.format',
+            'default': 'mp4',
+            'validator': lambda x: x in ['mp4', 'flv'],
+            'normalizer': lambda x: x if x in ['mp4', 'flv'] else 'mp4',
+            'description': '默认格式'
         },
         'user_info': {
             'path': 'user-info',
@@ -218,17 +232,19 @@ class ConfigManager:
             'download-task': {
                 'temp-dir': system_info.get_default_paths()['temp_dir'],
                 'download-dir': system_info.get_default_paths()['download_dir'],
-                'ffmpeg-path': '',
+                'ffmpeg-path': system_info.get_default_paths()['ffmpeg_path'],
                 'max-task': 2,
                 'download-speed-limit': 0,
-                'disable-mcdn': False
+                'disable-mcdn': False,
+                'quality': '720P',
+                'format': 'mp4'
             },
             'jdm': {
                 'max-retry': 3,
                 'retry-wait': 5,
                 'session-workers': 1,
                 'part-workers': 4,
-                'min-split-size': 1048576,
+                'min-split-size': 30,
                 'proxy-addr': '',
                 'check-best-mirror': True,
                 'cache-in-ram': False,
@@ -278,6 +294,7 @@ class ConfigManager:
                 # 如果配置文件不存在，使用默认配置并设置默认下载路径
                 self.config_data = self.default_config.copy()
                 logger.info(f"配置文件不存在，使用默认配置: {config_file}")
+                self.save_config()
                 
         except yaml.YAMLError as e:
             logger.error(f"配置文件格式错误: {e}")
@@ -286,6 +303,9 @@ class ConfigManager:
             logger.error(f"加载配置文件失败: {e}")
             self.config_data = self.default_config.copy()
             
+        if self._normalize_core_compatible_config():
+            self.save_config()
+        
         return self.config_data.copy()
     
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -293,6 +313,36 @@ class ConfigManager:
         merged = self.default_config.copy()
         self._deep_merge(merged, config)
         return merged
+    
+    def _normalize_core_compatible_config(self) -> bool:
+        """修正与核心进程不兼容的旧配置值"""
+        changed = False
+        jdm = self.config_data.get('jdm')
+        if not isinstance(jdm, dict):
+            self.config_data['jdm'] = jdm = {}
+            changed = True
+        
+        download_task = self.config_data.get('download-task')
+        if not isinstance(download_task, dict):
+            self.config_data['download-task'] = download_task = {}
+            changed = True
+        
+        ffmpeg_path = download_task.get('ffmpeg-path')
+        if not ffmpeg_path or not Path(ffmpeg_path).exists():
+            download_task['ffmpeg-path'] = system_info.get_default_paths()['ffmpeg_path']
+            changed = True
+        
+        min_split_size = jdm.get('min-split-size')
+        if not isinstance(min_split_size, int) or not (1 <= min_split_size <= 100):
+            jdm['min-split-size'] = 30
+            changed = True
+        
+        cache_in_ram_limit = jdm.get('cache-in-ram-limit')
+        if not isinstance(cache_in_ram_limit, int) or not (500 <= cache_in_ram_limit <= 16384):
+            jdm['cache-in-ram-limit'] = 512
+            changed = True
+        
+        return changed
     
     def _deep_merge(self, base: Dict[str, Any], update: Dict[str, Any]) -> None:
         """深度合并字典"""
@@ -399,6 +449,14 @@ class ConfigManager:
     def get_download_speed_limit(self) -> int:
         """获取下载速度限制"""
         return self.get_config('download_speed_limit')
+
+    def get_default_quality(self) -> str:
+        """获取默认清晰度"""
+        return self.get_config('default_quality')
+
+    def get_default_format(self) -> str:
+        """获取默认格式"""
+        return self.get_config('default_format')
     
     def get_user_info(self) -> Dict[str, Any]:
         """获取用户信息"""
@@ -434,8 +492,8 @@ class ConfigManager:
         
         # 验证下载速度限制
         speed_limit = self.get_download_speed_limit()
-        if speed_limit < 0 or speed_limit > 1048576:
-            errors.append(f"下载速度限制必须在0-1048576之间: {speed_limit}")
+        if speed_limit < 0 or speed_limit > 1073741824:
+            errors.append(f"下载速度限制必须在0-1073741824之间: {speed_limit}")
         
         # 验证端口配置
         ports = self.get_external_ports()

@@ -6,10 +6,7 @@
 import time
 from typing import Dict, Any
 from loguru import logger
-from core_manager import CoreManager
-
-# 创建全局实例
-core_manager = CoreManager()
+from core_manager import core_manager
 
 
 # 创建全局缓存变量
@@ -50,7 +47,7 @@ def update_core_status() -> bool:
         
         # 更新状态信息
         core['status'].update({
-            'is_running': core_status['is_running'],
+            'is_running': core_status['is_running'] or core_status.get('other_processes_running', False),
             'process_exists': core_status['process_exists'],
             'process_status': core_status.get('process_status', 'unknown'),
             'other_processes_running': core_status.get('other_processes_running', False),

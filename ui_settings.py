@@ -133,6 +133,18 @@ def create_settings_page():
                 max=5,
                 validation={'任务数必须在1-5之间': lambda v: 1 <= v <= 5}
             ).style('width: 200px')
+
+            default_quality = ui.select(
+                ['360P', '480P', '720P', '1080P'],
+                value=config_manager.get_default_quality(),
+                label='默认清晰度'
+            ).style('width: 220px')
+
+            default_format = ui.select(
+                ['mp4', 'flv'],
+                value=config_manager.get_default_format(),
+                label='默认格式'
+            ).style('width: 180px')
             
             # 下载速度限制
             speed_limit = ui.number(
@@ -210,7 +222,7 @@ def create_settings_page():
             # 最小分段大小
             min_split_size = ui.number(
                 label='最小分段大小 (MiB)',
-                value=config_manager.get('jdm.min-split-size', 1048576) // (1024 * 1024),
+                value=config_manager.get('jdm.min-split-size', 30),
                 min=1,
                 max=100,
                 validation={'分段大小必须在1-100 MiB之间': lambda v: 1 <= v <= 100}
@@ -352,7 +364,9 @@ def create_settings_page():
                     'ffmpeg-path': ffmpeg_path_input.value,
                     'max-task': int(max_tasks.value),
                     'download-speed-limit': int(speed_limit.value) * 1024 * 1024,  # 转换为bytes
-                    'disable-mcdn': disable_mcdn.value
+                    'disable-mcdn': disable_mcdn.value,
+                    'quality': default_quality.value,
+                    'format': default_format.value
                 },
                 'jdm': {
                     'max-retry': int(max_retry.value),
@@ -429,6 +443,8 @@ def create_settings_page():
                     ffmpeg_path_input.value = task.get('ffmpeg-path', '')
                     max_tasks.value = task.get('max-task', 2)
                     speed_limit.value = task.get('download-speed-limit', 0) // (1024 * 1024)  # 转换回MiB
+                    default_quality.value = task.get('quality', '720P')
+                    default_format.value = task.get('format', 'mp4')
                     disable_mcdn.value = task.get('disable-mcdn', False)
                 
                 if 'jdm' in settings_data:
@@ -438,10 +454,10 @@ def create_settings_page():
                     retry_wait.value = jdm.get('retry-wait', 5)
                     session_workers.value = jdm.get('session-workers', 4)
                     part_workers.value = jdm.get('part-workers', 4)
-                    min_split_size.value = jdm.get('min-split-size', 1048576) // (1024 * 1024)
+                    min_split_size.value = jdm.get('min-split-size', 30)
                     check_best_mirror.value = jdm.get('check-best-mirror', True)
                     cache_in_ram.value = jdm.get('cache-in-ram', False)
-                    cache_in_ram_limit.value = jdm.get('cache-in-ram-limit', 536870912) // (1024 * 1024)
+                    cache_in_ram_limit.value = jdm.get('cache-in-ram-limit', 512)
                     insecure_skip_verify.value = jdm.get('insecure-skip-verify', False)
                     custom_root_certificates.value = jdm.get('custom-root-certificates', '')
                 

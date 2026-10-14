@@ -7,15 +7,12 @@ import asyncio
 from nicegui import ui
 from loguru import logger
 
-from core_manager import CoreManager
+from core_manager import core_manager
 from config_manager import config_manager
 from system_info import system_info
 from log_manager import log_manager
+from download_manager import download_log_manager
 from core_status import update_core_status, get_core_status
-
-# 创建全局实例
-core_manager = CoreManager()
-
 
 def create_log_page():
     """创建日志页面UI组件"""
@@ -42,6 +39,30 @@ def create_log_page():
         stop_button = ui.button('停止运行', on_click=lambda: stop_core(log_display, start_button, stop_button))
         
         ui.button('清空日志', on_click=lambda: clear_logs(log_display))
+
+    ui.label('下载记录').style('font-size: 20px; font-weight: bold; margin-bottom: 10px')
+    download_log_display = ui.log().style(
+        'width: 100%; height: 180px; font-family: monospace; font-size: 12px; '
+        'overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px'
+    )
+
+    last_download_log_count = 0
+
+    def refresh_download_logs():
+        nonlocal last_download_log_count
+        try:
+            logs = download_log_manager.load_logs()
+            if len(logs) > last_download_log_count:
+                for log_line in logs[last_download_log_count:]:
+                    download_log_display.push(log_line, classes='text-blue')
+                last_download_log_count = len(logs)
+            elif len(logs) < last_download_log_count:
+                last_download_log_count = len(logs)
+        except Exception as e:
+            logger.error(f"加载下载记录失败: {str(e)}")
+
+    ui.timer(0.1, refresh_download_logs, once=True)
+    ui.timer(1.0, refresh_download_logs)
     
     # 核心运行状态显示
     status_label = ui.label('').style('font-size: 14px; margin-bottom: 10px; font-weight: bold')

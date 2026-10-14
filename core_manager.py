@@ -67,10 +67,16 @@ class CoreManager:
             logger.error(f"计算文件hash失败: {str(e)}")
             return None
     
-    def check_core_hash(self, resources_path: str = "./resources") -> dict:
+    def _resolve_resources_path(self, resources_path: Optional[str] = None) -> Path:
+        """解析核心文件目录，未指定时使用程序默认目录"""
+        if resources_path is None:
+            resources_path = system_info.get_default_paths()['resources_dir']
+        return Path(resources_path).resolve()
+    
+    def check_core_hash(self, resources_path: Optional[str] = None) -> dict:
         """检查核心文件的hash值是否匹配"""
         core_filename = self.get_core_filename()
-        core_path = Path(resources_path).resolve() / core_filename
+        core_path = self._resolve_resources_path(resources_path) / core_filename
         
         logger.debug(f"开始检查核心文件hash: {core_filename}, 路径: {core_path}")
         
@@ -123,10 +129,10 @@ class CoreManager:
             'message': 'Hash校验通过' if is_valid else 'Hash校验失败，文件可能已损坏或需要更新'
         }
     
-    def check_core_exist(self, resources_path: str = "./resources"):
+    def check_core_exist(self, resources_path: Optional[str] = None):
         """检查核心文件是否存在 - 已废弃，请使用check_core_hash()获取更详细的信息"""
         core_filename = self.get_core_filename()
-        core_path = Path(resources_path).resolve() / core_filename
+        core_path = self._resolve_resources_path(resources_path) / core_filename
         
         # 更新核心信息
         self.core_info = {
@@ -144,7 +150,7 @@ class CoreManager:
         self.check_core_exist()
         return self.core_info.copy()
     
-    async def download_file(self, url: str, filename: str, save_path: str = "./resources", 
+    async def download_file(self, url: str, filename: str, save_path: Optional[str] = None,
                           progress_callback: Optional[Callable] = None) -> dict:
         """
         异步下载文件
@@ -163,7 +169,7 @@ class CoreManager:
         logger.info(f"开始下载文件: {filename}, URL: {url}")
         
         # 创建保存目录 - 使用Pathlib进行路径处理
-        save_dir = Path(save_path).resolve()
+        save_dir = self._resolve_resources_path(save_path)
         save_dir.mkdir(parents=True, exist_ok=True)
         
         file_path = save_dir / filename
@@ -316,7 +322,7 @@ class CoreManager:
             minutes = int((seconds % 3600) / 60)
             return f"{hours}时{minutes}分"
     
-    def start_core(self, config_file_path: str, resources_path: str = "./resources") -> bool:
+    def start_core(self, config_file_path: str, resources_path: Optional[str] = None) -> bool:
         """
         启动核心程序，保证同时只启动一个核心
         
@@ -341,7 +347,7 @@ class CoreManager:
             
             # 获取核心文件路径
             core_filename = self.get_core_filename()
-            core_path = Path(resources_path).resolve() / core_filename
+            core_path = self._resolve_resources_path(resources_path) / core_filename
             
             if not core_path.exists():
                 logger.error(f"核心文件不存在: {core_path}")

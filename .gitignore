@@ -1,8 +1,15 @@
 /.vscode
+/.venv
+/build
+/dist
+/*.spec
 /config
 /Download
 /downloads
 /logs
 /resources
+/resources/*
+!/resources/
+!/resources/ffmpeg.exe
 /TEMP
 /__pycache__
