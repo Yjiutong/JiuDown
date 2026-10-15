@@ -27,35 +27,38 @@ def create_home_page():
     .text-fata { color: #d32f2f; font-weight: bold; background-color: #ffebee; padding: 2px 4px; border-radius: 3px; }
     """)
     
-    ui.label('唧唧2.0')
-    ui.label('核心状态')
-    
-    # 显示系统信息
+    ui.label('状态总览').classes('page-heading')
+
     sys_info = system_info.get_system_info()
-    ui.label(f'系统: {sys_info["system"]} {sys_info["architecture"]} {sys_info["processor_type"]}')
-    ui.label(f'机器类型: {sys_info["machine"]}')
-    
-    # 显示选择的核心文件
     core_filename = system_info.get_core_filename()
-    core_status = ui.label(f'选择的核心文件: {core_filename}')
-    
-    # Hash校验结果显示
-    hash_status = ui.label('').style('margin-top: 10px')
-    
-    # 核心运行状态显示
-    core_running_status = ui.label('').style('margin-top: 10px; font-weight: bold')
-    
-    # 显示FFmpeg内置状态
+    core_status = ui.label(core_filename)
+    hash_status = ui.label('')
+    core_running_status = ui.label('检测中...')
     ffmpeg_path = config_manager.get_ffmpeg_path()
-    ffmpeg_exists = Path(ffmpeg_path).exists() if ffmpeg_path else False
+    ffmpeg_exists = bool(ffmpeg_path and Path(ffmpeg_path).exists())
     ffmpeg_status = ui.label('')
-    ffmpeg_status.set_text(f'FFmpeg: {ffmpeg_path} (已内置)' if ffmpeg_exists else f'FFmpeg: {ffmpeg_path} (未找到)')
-    ffmpeg_status.style('font-size: 12px; color: green' if ffmpeg_exists else 'font-size: 12px; color: red')
-    
-    # 详细信息展开区域
-    details_expansion = ui.expansion('详细信息', icon='info').style('margin-top: 10px')
-    
-    # 进度条和状态显示区域
+
+    with ui.row().classes('w-full gap-3 mt-4'):
+        with ui.column().classes('status-card flex-grow min-w-[170px]'):
+            ui.label('核心运行').classes('muted-text')
+            core_running_status.classes('metric-value')
+            ui.label('每 5 秒自动检测').classes('muted-text')
+        with ui.column().classes('status-card flex-grow min-w-[220px]'):
+            ui.label('核心文件').classes('muted-text')
+            core_status.classes('metric-value text-sm').style('word-break: break-all')
+            hash_status.classes('muted-text mt-1')
+        with ui.column().classes('status-card flex-grow min-w-[160px]'):
+            ui.label('FFmpeg').classes('muted-text')
+            ffmpeg_status.classes('metric-value text-sm')
+        with ui.column().classes('status-card flex-grow min-w-[170px]'):
+            ui.label('系统环境').classes('muted-text')
+            ui.label(f'{sys_info["system"]} {sys_info["architecture"]} {sys_info["processor_type"]}').classes('metric-value text-sm')
+            ui.label(f'机器类型: {sys_info["machine"]}').classes('muted-text')
+
+    ffmpeg_status.set_text('已内置' if ffmpeg_exists else '未找到')
+    ffmpeg_status.style('color: #15803d' if ffmpeg_exists else 'color: #b91c1c')
+
+    details_expansion = ui.expansion('完整性验证', icon='verified').classes('mt-4 q-expansion-item')
     progress_container = ui.column().style('width: 100%; margin-top: 20px')
     
     # 更新核心运行状态显示

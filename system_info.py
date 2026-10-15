@@ -8,6 +8,27 @@ from typing import Dict, Any, Optional
 from loguru import logger
 
 
+# 各平台对应的官方核心文件名（官网下载源真实存在的文件）
+CORE_PLATFORM_FILENAMES = {
+    'windows-64': 'JiJiDownCore-win64.exe',
+    'windows-32': 'JiJiDownCore-win32.exe',
+    'darwin-arm64': 'JiJiDownCore-darwin-arm64',
+    'darwin-amd64': 'JiJiDownCore-darwin-amd64',
+    'linux-arm64': 'JiJiDownCore-linux-arm64',
+    'linux-amd64': 'JiJiDownCore-linux-amd64',
+}
+
+# 本地核心文件名（SHOUDown 品牌名，下载后保存为该名称）
+CORE_LOCAL_FILENAMES = {
+    'windows-64': 'SHOUDownCore-win64.exe',
+    'windows-32': 'SHOUDownCore-win32.exe',
+    'darwin-arm64': 'SHOUDownCore-darwin-arm64',
+    'darwin-amd64': 'SHOUDownCore-darwin-amd64',
+    'linux-arm64': 'SHOUDownCore-linux-arm64',
+    'linux-amd64': 'SHOUDownCore-linux-amd64',
+}
+
+
 class SystemInfo:
     """系统信息工具类，提供统一的系统信息获取接口"""
     
@@ -39,44 +60,42 @@ class SystemInfo:
             'python_version': platform.python_version()
         }
     
-    def get_core_filename(self) -> str:
-        """根据操作系统和架构返回对应的核心文件名"""
+    def _core_platform_key(self) -> str:
+        """返回当前平台对应的核心文件平台标识"""
         system = platform.system().lower()
         machine = platform.machine().lower()
         
-        # 判断系统架构
         is_64bit = struct.calcsize("P") * 8 == 64
         is_arm = 'arm' in machine or 'aarch64' in machine
         
         if system == 'windows':
-            if is_64bit:
-                return 'JiJiDownCore-win64.exe'
-            else:
-                return 'JiJiDownCore-win32.exe'
+            return 'windows-64' if is_64bit else 'windows-32'
         elif system == 'darwin':  # macOS
-            if is_arm:
-                return 'JiJiDownCore-darwin-arm64'
-            else:
-                return 'JiJiDownCore-darwin-amd64'
+            return 'darwin-arm64' if is_arm else 'darwin-amd64'
         elif system == 'linux':
-            if is_arm:
-                return 'JiJiDownCore-linux-arm64'
-            else:
-                return 'JiJiDownCore-linux-amd64'
+            return 'linux-arm64' if is_arm else 'linux-amd64'
         else:
             # 默认返回Windows 64位版本
-            return 'JiJiDownCore-win64.exe'
+            return 'windows-64'
+    
+    def get_core_filename(self) -> str:
+        """根据操作系统和架构返回本地核心文件名（SHOUDown 品牌）"""
+        return CORE_LOCAL_FILENAMES[self._core_platform_key()]
+    
+    def get_official_core_filename(self) -> str:
+        """返回官方核心文件名（官网下载源使用的真实文件名）"""
+        return CORE_PLATFORM_FILENAMES[self._core_platform_key()]
     
     def get_config_dir(self) -> Path:
         """获取配置目录路径"""
         system = platform.system()
         
         if system == 'Windows':
-            config_dir = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming')) / 'JiJiDown'
+            config_dir = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming')) / 'SHOUDown'
         elif system == 'Darwin':  # macOS
-            config_dir = Path.home() / '.config' / 'JiJiDown'
+            config_dir = Path.home() / '.config' / 'SHOUDown'
         else:  # Linux
-            config_dir = Path.home() / '.config' / 'JiJiDown'
+            config_dir = Path.home() / '.config' / 'SHOUDown'
         
         return config_dir
     

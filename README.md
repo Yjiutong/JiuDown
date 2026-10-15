@@ -1,10 +1,23 @@
-# JiJiDown Desktop
+# SHOUDown Desktop
 
-唧唧下载器桌面版 - 基于Python的现代化B站视频下载工具
+SHOUDown 桌面版 - 基于Python的现代化B站视频下载工具
 
 ## 项目简介
 
-JiJiDown Desktop 是一个基于Python开发的B站视频下载工具，采用现代化的Web界面，支持多平台运行。项目使用NiceGUI框架构建用户界面，提供直观的操作体验。
+SHOUDown Desktop 是一个基于 Python 开发的 B 站视频下载桌面应用，采用 PySide6（Qt）构建原生桌面界面，支持多平台运行，提供直观的操作体验。
+
+本项目 **fork 自开源项目 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（唧唧下载器桌面版）**，并在此基础上修改完善，包括界面重构、架构升级与功能增强。
+
+## 项目来源
+
+本项目 fork 自 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（原项目：JiJiDown Desktop，唧唧下载器桌面版，作者 o5-null），并在其基础上修改完善：
+
+- **核心组件**：沿用上游的 [JiJiDownCore](https://jj.紫灵.top/PC/ReWPF/core/) 作为 B 站视频下载核心（本地以 SHOUDownCore-* 命名保存）
+- **界面重构**：由原始 NiceGUI Web 界面重构为 PySide6 (Qt) 原生桌面应用
+- **架构升级**：新增 asyncio 后台线程桥、模块化页面结构、QSS 统一设计规范
+- **功能完善**：多任务并发调度、断点续传、批量下载、状态监控、日志管理等
+
+> 上游原项目：[o5-null/JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)。上游项目与核心组件均属第三方开源作品，本项目仅在其基础上修改完善，遵守上游项目的开源许可与使用条款。
 
 ## 功能特性
 
@@ -12,7 +25,7 @@ JiJiDown Desktop 是一个基于Python开发的B站视频下载工具，采用�
 - 🎯 **智能核心管理**：自动检测系统架构，下载对应版本的核心文件
 - 🔒 **文件完整性验证**：通过SHA256哈希校验确保核心文件完整
 - 📱 **跨平台支持**：支持Windows、macOS、Linux系统
-- 🌐 **现代化Web界面**：基于NiceGUI的响应式界面
+- 🖥️ **原生桌面界面**：基于PySide6 (Qt) 的现代桌面应用界面
 - ⚡ **异步下载**：支持大文件分块下载，实时显示下载进度
 
 ### 下载管理
@@ -35,7 +48,7 @@ JiJiDown Desktop 是一个基于Python开发的B站视频下载工具，采用�
 - **Linux** Ubuntu 18.04+, CentOS 7+, 其他主流发行版
 
 ### Python环境
-- **Python** 3.8+
+- **Python** 3.9+
 - **pip** 最新版本
 
 ### 硬件要求
@@ -47,8 +60,8 @@ JiJiDown Desktop 是一个基于Python开发的B站视频下载工具，采用�
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/your-username/JiJiDownForDesktop.git
-cd JiJiDownForDesktop
+git clone https://github.com/Yjiutong/SHOUDown.git
+cd SHOUDown
 ```
 
 ### 2. 安装依赖
@@ -58,37 +71,62 @@ pip install -r requirements.txt
 
 ### 3. 运行应用
 ```bash
-python main.py
+python app.py
 ```
 
-应用启动后，默认会在 `http://localhost:8080` 打开Web界面。
+启动后直接显示桌面应用主窗口。
 
 ## 项目结构
 
 ```
-JiJiDownForDesktop/
-├── main.py                 # 主程序入口
-├── config_manager.py       # 配置管理模块
-├── core_manager.py         # 核心文件管理模块
+SHOUDown/
+├── app.py                 # 主程序入口（PySide6）
+├── main_window.py         # 主窗口（侧边导航 + 页面栈）
+├── theme.py               # QSS 主题与配色常量
+├── async_bridge.py        # asyncio 后台线程桥
+├── pages/                 # 页面模块
+│   ├── home_page.py       # 状态总览页
+│   ├── download_page.py   # 视频下载页
+│   ├── log_page.py        # 运行日志页
+│   └── settings_page.py   # 设置页
+├── legacy_nicegui/        # 旧版 NiceGUI Web 界面（存档）
+├── config_manager.py      # 配置管理模块
+├── core_manager.py        # 核心文件管理模块
+├── download_manager.py    # 视频下载管理模块
+├── log_manager.py         # 日志持久化模块
+├── core_status.py         # 核心状态缓存模块
 ├── system_info.py         # 系统信息工具模块
-├── utils.py               # 工具函数模块
 ├── requirements.txt       # Python依赖包列表
-├── config/               # 配置文件目录
-├── Download/             # 下载文件目录
-├── TEMP/                 # 临时文件目录
-├── logs/                 # 日志文件目录
-├── resources/            # 核心文件目录
-└── downloads/            # 下载缓存目录
+├── config/                # 配置文件目录
+├── Download/              # 下载文件目录
+├── TEMP/                  # 临时文件目录
+├── logs/                  # 日志文件目录
+├── resources/             # 核心文件目录
+└── downloads/             # 下载缓存目录
 ```
 
 ## 核心模块说明
 
-### main.py
-主程序入口，负责：
+### app.py / main_window.py
+应用入口与主窗口，负责：
 - 初始化应用配置
-- 创建Web界面
+- 创建桌面主窗口（侧边导航 + 页面栈）
+- 启动 asyncio 后台线程桥
 - 管理核心文件状态
 - 处理用户交互
+
+### pages/
+页面模块，每个页面一个文件：
+- `home_page.py`：状态总览（核心运行、文件完整性、FFmpeg、系统环境）
+- `download_page.py`：B站视频批量下载与任务管理
+- `log_page.py`：核心运行日志与下载记录
+- `settings_page.py`：应用配置与参数设置
+
+### async_bridge.py
+asyncio 后台线程桥，让基于 asyncio 的下载调度与 Qt 事件循环共存。
+
+### theme.py
+全局 QSS 样式表与配色常量，统一定义界面视觉规范。
 
 ### config_manager.py
 配置管理模块，提供：
@@ -111,18 +149,15 @@ JiJiDownForDesktop/
 - 路径管理
 - 缓存机制
 
-### utils.py
-工具函数模块，包含：
-- 文件对话框工具
-- 路径处理函数
-- 异步操作支持
+### legacy_nicegui/
+旧版 NiceGUI Web 界面存档（router.py、ui_*.py 等），仅供历史参考，不再参与构建。
 
 ## 配置说明
 
 ### 配置文件位置
-- **Windows**: `%APPDATA%\JiJiDown\config.yaml`
-- **macOS**: `~/.config/JiJiDown/config.yaml`
-- **Linux**: `~/.config/JiJiDown/config.yaml`
+- **Windows**: `%APPDATA%\SHOUDown\config.yaml`
+- **macOS**: `~/.config/SHOUDown/config.yaml`
+- **Linux**: `~/.config/SHOUDown/config.yaml`
 
 ### 主要配置项
 
@@ -168,10 +203,10 @@ download-task:
 - **手动下载**: 支持手动选择下载核心文件
 
 ### 下载操作
-1. 在Web界面输入B站视频链接
+1. 在应用界面输入B站视频链接（支持批量，每行一个）
 2. 选择下载质量和格式
 3. 设置保存路径
-4. 开始下载并查看实时进度
+4. 点击「添加下载」并查看实时进度
 
 ## 常见问题
 
@@ -182,7 +217,7 @@ A: 检查网络连接，或手动从官网下载对应版本的核心文件到 `
 A: 可能是文件损坏，请删除 `resources` 目录下的核心文件，重新下载。
 
 ### Q: 如何修改下载路径？
-A: 在Web界面的设置中修改下载目录，或直接编辑配置文件。
+A: 在「设置」页的下载设置中修改下载目录，或直接编辑配置文件。
 
 ### Q: 支持哪些视频格式？
 A: 支持B站所有公开的视频格式，包括MP4、FLV等。
@@ -193,13 +228,13 @@ A: 日志文件保存在 `logs` 目录下，按日期分割。
 ## 技术架构
 
 ### 前端技术
-- **NiceGUI**: 基于Vue.js的Python Web框架
-- **响应式设计**: 适配不同屏幕尺寸
-- **实时更新**: WebSocket实时通信
+- **PySide6 (Qt)**: Python 官方推荐的 Qt 绑定，原生桌面界面
+- **QSS**: Qt 样式表，统一的设计规范（品牌色、卡片、徽章）
+- **异步刷新**: QTimer 定时轮询 + Qt 信号跨线程通信
 
 ### 后端技术
-- **Python 3.8+**: 主要编程语言
-- **异步编程**: asyncio异步处理
+- **Python 3.9+**: 主要编程语言
+- **异步编程**: asyncio 后台线程桥，下载调度与 UI 事件循环共存
 - **模块化设计**: 清晰的代码结构
 - **错误处理**: 完善的异常处理机制
 
@@ -273,6 +308,14 @@ python -m pdb main.py
 
 ## 更新日志
 
+### v2.0.0 (2026-10-15)
+- ✅ 架构迁移：NiceGUI Web 界面 → PySide6 (Qt) 原生桌面应用
+- ✅ 全新界面：侧边导航 + 页面栈，QSS 统一设计规范
+- ✅ asyncio 后台线程桥：下载调度与 UI 事件循环共存
+- ✅ 现代视觉：状态卡片、彩色状态徽章、圆角进度条、分组表单
+- ✅ 名称统一：应用名称统一为 SHOUDown，核心文件本地以 SHOUDownCore 命名
+- ✅ 明确 fork 关系：文档注明本项目 fork 自 JiJiDownForDesktop 并修改完善
+
 ### v1.0.0 (2024-11-12)
 - ✅ 初始版本发布
 - ✅ 跨平台核心文件管理
@@ -283,17 +326,17 @@ python -m pdb main.py
 
 ## 联系方式
 
-- **项目主页**: [GitHub Repository](https://github.com/your-username/JiJiDownForDesktop)
-- **问题反馈**: [GitHub Issues](https://github.com/your-username/JiJiDownForDesktop/issues)
+- **项目主页**: [GitHub Repository](https://github.com/Yjiutong/SHOUDown)
+- **问题反馈**: [GitHub Issues](https://github.com/Yjiutong/SHOUDown/issues)
 - **邮箱**: your-email@example.com
 
 ## 致谢
 
 感谢以下开源项目的支持：
-- [NiceGUI](https://nicegui.io/) - 优秀的Python Web框架
+- [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop) - 上游原项目（本项目 fork 自 JiJiDownForDesktop 并修改完善）
+- [PySide6 (Qt)](https://www.qt.io/qt-for-python) - 原生桌面应用框架
 - [Requests](https://docs.python-requests.org/) - 人性化的HTTP库
 - [Loguru](https://github.com/Delgan/loguru) - 简单易用的日志库
-- [JiJiDown](https://jj.紫灵.top/) - B站视频下载核心
 
 ---
 

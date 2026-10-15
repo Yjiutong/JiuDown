@@ -37,7 +37,7 @@ def _open_output_dir(path: str) -> None:
 
 def create_download_page():
     """创建下载页面UI组件"""
-    ui.label("视频下载").style("font-size: 24px; font-weight: bold; margin-bottom: 20px")
+    ui.label("视频下载").classes("page-heading mb-4")
 
     url_input = ui.textarea(
         label="B站视频链接",
@@ -71,7 +71,7 @@ def create_download_page():
         ui.button("添加下载", icon="playlist_add", on_click=lambda: add_tasks()).props("color=primary")
         ui.button("清空已完成", icon="clear_all", on_click=lambda: clear_completed()).props("flat")
 
-    empty_label = ui.label("暂无下载任务").classes("text-gray-400 mt-4")
+    empty_label = ui.label("暂无下载任务").classes("muted-text mt-4")
     task_container = ui.column().classes("w-full mt-4")
     rows = {}
 
@@ -122,7 +122,7 @@ def create_download_page():
         row = rows.get(task_id)
         if row is None:
             with task_container:
-                card = ui.card().classes("w-full mb-3 p-3")
+                card = ui.card().classes("download-task-card w-full mb-3 p-0")
             with card:
                 with ui.row().classes("w-full items-center justify-between gap-2"):
                     with ui.column().classes("flex-grow min-w-0"):

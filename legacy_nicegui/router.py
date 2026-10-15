@@ -64,14 +64,16 @@ class Router:
     
     def create_navigation_header(self):
         """创建导航头部"""
-        with ui.header().classes('bg-blue-100 items-center justify-between px-4 py-2 shadow-md'):
+        with ui.header().classes('shoudown-header items-center justify-between px-5'):
             # 应用标题
-            with ui.row().classes('items-center'):
-                ui.icon('rocket', size='24px').classes('text-blue-600')
-                ui.label('JiJiDown Desktop').classes('text-xl font-bold text-blue-800')
+            with ui.row().classes('items-center gap-2'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('rocket_launch', size='24px').classes('shoudown-logo-icon')
+                    ui.label('SHOUDown Desktop').classes('text-base font-bold text-white tracking-wide')
+                ui.label('B站视频下载工具').classes('shoudown-header-sub')
             
             # 导航菜单
-            with ui.row().classes('items-center space-x-2'):
+            with ui.row().classes('items-center gap-1'):
                 for path, route_info in self.routes.items():
                     is_active = self.current_route == path
                     
@@ -79,13 +81,13 @@ class Router:
                         route_info['name'],
                         icon=route_info['icon'],
                         on_click=lambda p=path: self.navigate_to(p)
-                    ).props('flat').classes(
-                        f"text-blue-700 hover:bg-blue-200 {'bg-blue-300' if is_active else ''}"
+                    ).props('flat dense no-caps').classes(
+                        f"shoudown-nav-btn {'active' if is_active else ''}"
                     )
     
     def create_content_area(self):
         """创建内容区域"""
-        with ui.column().classes('flex-grow p-4'):
+        with ui.column().classes('flex-grow page-container'):
             # 使用sub_pages实现客户端路由
             route_components = {path: route_info['component'] for path, route_info in self.routes.items()}
             ui.sub_pages(route_components).classes('w-full')
@@ -97,6 +99,34 @@ class Router:
         @ui.page('/{_:path}')
         def main_spa():
             """主SPA页面"""
+            ui.add_css("""
+            body { background: #f5f6f8; }
+            .shoudown-header { background: #111827; border-bottom: 1px solid #1f2937; min-height: 54px; }
+            .shoudown-nav-btn { color: #cbd5e1; border-radius: 8px !important; margin: 0 2px; }
+            .shoudown-nav-btn.active { background: #2563eb !important; color: white !important; }
+            .page-container { padding: 24px 28px; max-width: 1280px; width: 100%; box-sizing: border-box; }
+            .page-heading { font-size: 24px; font-weight: 700; color: #111827; }
+            .status-card, .download-task-card {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 14px 16px;
+            }
+            .log-panel {
+                background: #111827;
+                color: #d1d5db;
+                border: 1px solid #374151;
+                border-radius: 8px;
+                padding: 10px;
+                font-family: ui-monospace, monospace;
+                font-size: 12px;
+            }
+            .metric-value { font-size: 20px; font-weight: 700; color: #111827; }
+            .muted-text { font-size: 12px; color: #6b7280; }
+            .q-expansion-item { border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff; overflow: hidden; }
+            .q-field, .q-btn, .q-tab { font-size: 13px; }
+            .q-input, .q-select, .q-textarea { min-width: 0; }
+            """)
             # 创建导航头部
             self.create_navigation_header()
             

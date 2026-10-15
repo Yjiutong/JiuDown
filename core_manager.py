@@ -1,7 +1,10 @@
 import requests
 import asyncio
+import os
+import platform
+import yaml
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 import time
 import hashlib
 import subprocess
@@ -30,6 +33,47 @@ class CoreManager:
     def get_core_filename(self):
         """根据操作系统和架构返回对应的核心文件名"""
         return system_info.get_core_filename()
+
+    def get_core_config_path(self) -> Path:
+        """核心程序硬编码的配置路径（核心自身逻辑，无法通过启动参数更改）"""
+        system = platform.system()
+        if system == 'Windows':
+            return Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming')) / 'JiJiDown' / 'config.yaml'
+        elif system == 'Darwin':
+            return Path.home() / '.config' / 'JiJiDown' / 'config.yaml'
+        else:
+            return Path.home() / '.config' / 'JiJiDown' / 'config.yaml'
+
+    def _build_core_config(self, app_config: Dict[str, Any]) -> Dict[str, Any]:
+        """从应用配置构造核心兼容配置（剔除应用特有字段，避免核心解析失败）"""
+        core_config: Dict[str, Any] = {}
+        for section in ('log-level', 'external-controller-port', 'user-info', 'jdm'):
+            if section in app_config:
+                core_config[section] = app_config[section]
+        if 'download-task' in app_config:
+            dt = dict(app_config['download-task'])
+            for key in ('quality', 'format'):
+                dt.pop(key, None)
+            core_config['download-task'] = dt
+        return core_config
+
+    def _sync_core_config(self, config_file_path: str) -> Optional[Path]:
+        """将应用配置同步为核心可解析的配置，写入核心硬编码路径"""
+        try:
+            with open(config_file_path, 'r', encoding='utf-8') as f:
+                app_config = yaml.safe_load(f) or {}
+            core_config = self._build_core_config(app_config)
+            core_path = self.get_core_config_path()
+            core_path.parent.mkdir(parents=True, exist_ok=True)
+            core_path.write_text(
+                yaml.safe_dump(core_config, allow_unicode=True, sort_keys=False),
+                encoding='utf-8',
+            )
+            logger.debug(f"核心配置已同步: {core_path}")
+            return core_path
+        except Exception as e:
+            logger.error(f"同步核心配置失败: {str(e)}")
+            return None
     
     def get_official_hash(self, filename: str) -> Optional[str]:
         """从官方获取文件的SHA256哈希值"""
@@ -88,8 +132,9 @@ class CoreManager:
                 'message': '核心文件不存在'
             }
         
-        # 获取官方hash值
-        official_hash = self.get_official_hash(core_filename)
+        # 获取官方hash值（官网 hash 表使用官方文件名，本地文件使用 SHOUDown 品牌名）
+        official_filename = system_info.get_official_core_filename()
+        official_hash = self.get_official_hash(official_filename)
         hash_source = 'official'
         
         # 如果无法获取官方hash，使用备用hash
@@ -357,6 +402,9 @@ class CoreManager:
             if not config_path.exists():
                 logger.error(f"配置文件不存在: {config_path}")
                 return False
+            
+            # 同步核心配置到核心硬编码路径（%APPDATA%\JiJiDown\config.yaml）
+            self._sync_core_config(config_file_path)
             
             # 检查是否已经有同名进程在运行（额外的安全措施）
             if self._is_core_process_running(core_filename):

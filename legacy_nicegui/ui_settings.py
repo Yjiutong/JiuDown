@@ -14,7 +14,7 @@ from utils import create_file_browser_button
 def create_settings_page():
     """创建设置页面UI组件"""
     
-    ui.label('设置').style('font-size: 24px; font-weight: bold; margin-bottom: 20px')
+    ui.label('设置').classes('page-heading mb-4')
 
     # 加载当前配置
     current_config = config_manager.load_config()

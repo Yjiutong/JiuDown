@@ -1193,4 +1193,4 @@ app.on_startup(initialize_config)
 if __name__ in {"__main__", "__mp_main__"}:
 
     # 启动UI
-    ui.run(home,title='JiJiDown Desktop', host='0.0.0.0', port=8080,native=True)
+    ui.run(home,title='SHOUDown Desktop', host='0.0.0.0', port=8080,native=True)

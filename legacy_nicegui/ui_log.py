@@ -17,17 +17,17 @@ from core_status import update_core_status, get_core_status
 def create_log_page():
     """创建日志页面UI组件"""
     
-    ui.label('核心运行日志').style('font-size: 24px; font-weight: bold; margin-bottom: 20px')
+    ui.label('运行日志').classes('page-heading mb-4')
     
     # 显示核心文件信息
     core_filename = system_info.get_core_filename()
     config_file_path = config_manager.get_config_file_path()
     
-    ui.label(f'核心文件: {core_filename}').style('font-size: 14px; margin-bottom: 5px')
-    ui.label(f'配置文件: {config_file_path}').style('font-size: 14px; margin-bottom: 20px')
+    ui.label(f'核心文件: {core_filename}').classes('muted-text mb-1')
+    ui.label(f'配置文件: {config_file_path}').classes('muted-text mb-4')
     
     # 使用ui.log()组件显示日志
-    log_display = ui.log().style('width: 100%; height: 500px; font-family: monospace; font-size: 12px; overflow-y: auto; border: 1px solid #ccc; padding: 10px')
+    log_display = ui.log().classes('log-panel w-full').style('height: 480px')
 
     
     # 控制按钮
@@ -40,11 +40,8 @@ def create_log_page():
         
         ui.button('清空日志', on_click=lambda: clear_logs(log_display))
 
-    ui.label('下载记录').style('font-size: 20px; font-weight: bold; margin-bottom: 10px')
-    download_log_display = ui.log().style(
-        'width: 100%; height: 180px; font-family: monospace; font-size: 12px; '
-        'overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px'
-    )
+    ui.label('下载记录').classes('mt-4 text-base font-bold mb-2')
+    download_log_display = ui.log().classes('log-panel w-full').style('height: 180px; margin-bottom: 10px')
 
     last_download_log_count = 0
 
