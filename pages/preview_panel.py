@@ -14,7 +14,7 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 import requests
@@ -46,31 +46,48 @@ _PROXY_STREAM_HEADERS = {}
 
 
 class _PreviewVideoWidget(QVideoWidget):
-    """画面随视频自身比例自适应：铺满面板宽度、按视频宽高比定高度，
-    高度超出部分由页面级滚动条浏览完整画面"""
+    """画面随视频自身比例自适应：铺满面板宽度、高度=宽度×宽高比（无黑边）
 
-    def __init__(self, parent=None):
+    高度同时锁定最小与最大值：宽度变化时按比例重算，视频始终精确填满
+    控件（不出现 letterbox 黑边）；每次重算沿父链失效布局，保证面板与
+    页面滚动区同步长高——仅设 minimumHeight 会被外层布局压缩，导致视频
+    区溢出面板、控制条被挤出生效区。
+    """
+
+    def __init__(self, parent=None, on_height_changed=None):
         super().__init__(parent)
         self._ratio_w = 16
         self._ratio_h = 9
+        self._on_height_changed = on_height_changed
         self.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.setMinimumHeight(240)
+        self.setMaximumHeight(240)
 
     def set_video_size(self, w: int, h: int) -> None:
         """播放器上报实际视频尺寸时更新宽高比并重算高度"""
         if w > 0 and h > 0 and (w, h) != (self._ratio_w, self._ratio_h):
             self._ratio_w, self._ratio_h = w, h
-            self._update_min_height()
+            self._apply_height()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._update_min_height()
+        self._apply_height()
 
-    def _update_min_height(self) -> None:
+    def _apply_height(self) -> None:
         w = self.width()
-        if w > 100:
-            target = max(int(w * self._ratio_h / self._ratio_w), 240)
-            if self.minimumHeight() != target:
-                self.setMinimumHeight(target)
+        if w <= 100:
+            return
+        target = max(round(w * self._ratio_h / self._ratio_w), 240)
+        if self.minimumHeight() != target or self.maximumHeight() != target:
+            self.setMinimumHeight(target)
+            self.setMaximumHeight(target)
+            # 沿父链失效布局：面板/滚动区按新高度重排
+            parent = self.parentWidget()
+            while parent is not None:
+                parent.updateGeometry()
+                parent = parent.parentWidget()
+            if self._on_height_changed is not None:
+                self._on_height_changed()
 
 
 class _StreamProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -109,28 +126,39 @@ class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 # ---------------------------------------------------------------- 播放条 UI
-# 播放控制条样式（仅作用于预览面板内控件）
-_PLAY_SLIDER_QSS = """
-QSlider { background: transparent; }
-QSlider::groove:horizontal { height: 6px; background: #e9f2f1; border-radius: 3px; }
-QSlider::sub-page:horizontal { background: #39C5BB; border-radius: 3px; }
-QSlider::handle:horizontal { width: 14px; height: 14px; margin: -4px 0;
-    background: #ffffff; border: 2px solid #39C5BB; border-radius: 7px; }
-QSlider::handle:horizontal:hover { background: #e6f7f6; }
-QSlider::handle:horizontal:pressed { background: #ccfbf1; }
+# 播放控制条样式（仅作用于预览面板内控件）。
+# 控制条是常驻深色半透明媒体面（压在视频画面上，不随应用主题反色），
+# 因此轨道/时间文字使用固定的深色面对比色；品牌色（进度/按钮）跟随主题令牌。
+def _play_slider_qss() -> str:
+    from theme import C
+    return f"""
+QSlider {{ background: transparent; }}
+QSlider::groove:horizontal {{ height: 6px; background: {C['media_groove']}; border-radius: 3px; }}
+QSlider::sub-page:horizontal {{ background: {C['brand']}; border-radius: 3px; }}
+QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -4px 0;
+    background: #ffffff; border: 2px solid {C['brand']}; border-radius: 7px; }}
+QSlider::handle:horizontal:hover {{ background: #e6f7f6; }}
+QSlider::handle:horizontal:pressed {{ background: #ccfbf1; }}
 """
 
-_PLAY_BUTTON_QSS = """
-QPushButton { background: #39C5BB; color: #ffffff; border: none;
-    border-radius: 999px; padding: 5px 16px; font-size: 12px; font-weight: 600; }
-QPushButton:hover { background: #0E948C; }
-QPushButton:pressed { background: #0d7f78; }
-QPushButton:disabled { background: #a8e3df; color: #f8fafc; }
+
+def _play_button_qss() -> str:
+    from theme import C
+    return f"""
+QPushButton {{ background: {C['brand']}; color: {C['on_brand']}; border: none;
+    border-radius: 999px; padding: 5px 16px; font-size: 12px; font-weight: 600; }}
+QPushButton:hover {{ background: {C['brand_dark']}; }}
+QPushButton:pressed {{ background: {C['brand_darker']}; }}
+QPushButton:disabled {{ background: {C['primary_disabled_bg']}; color: {C['primary_disabled_text']}; }}
 """
 
-_TIME_LABEL_QSS = """
-QLabel { color: #546b69; font-size: 12px; font-family: Consolas, "Courier New", monospace;
-    min-width: 96px; }
+
+def _time_label_qss() -> str:
+    # 时间文字固定在深色控制条上：用浅色保证可读（原 #546b69 在深色条上仅 2.58:1）
+    from theme import C
+    return f"""
+QLabel {{ color: {C['media_text']}; font-size: 12px; font-family: Consolas, "Courier New", monospace;
+    min-width: 96px; }}
 """
 
 
@@ -197,6 +225,38 @@ class PreviewPanel(QWidget):
         header.addWidget(self.close_btn)
         outer.addLayout(header)
 
+        # 工具行按模式二选一：在线=链接输入行，本地=文件选择行。
+        # （原先两套控件同行的堆叠布局是在线预览时显得杂乱的主因）
+        self.online_row = QWidget()
+        self.online_row.setStyleSheet("background: transparent;")
+        online_lay = QHBoxLayout(self.online_row)
+        online_lay.setContentsMargins(0, 0, 0, 0)
+        online_lay.setSpacing(8)
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("B站链接，回车在线预览")
+        self.url_input.returnPressed.connect(self._load_online)
+        self.load_btn = QPushButton("加载")
+        self.load_btn.setProperty("small", True)
+        self.load_btn.clicked.connect(self._load_online)
+        online_lay.addWidget(self.url_input, 1)
+        online_lay.addWidget(self.load_btn)
+        outer.addWidget(self.online_row)
+
+        self.local_row = QWidget()
+        self.local_row.setStyleSheet("background: transparent;")
+        local_lay = QHBoxLayout(self.local_row)
+        local_lay.setContentsMargins(0, 0, 0, 0)
+        local_lay.setSpacing(8)
+        self.open_btn = QPushButton("打开视频")
+        self.open_btn.setProperty("small", True)
+        self.open_btn.clicked.connect(self._open_local)
+        self.local_name_label = QLabel("未加载视频")
+        self.local_name_label.setProperty("muted", True)
+        self.local_name_label.setWordWrap(True)
+        local_lay.addWidget(self.open_btn)
+        local_lay.addWidget(self.local_name_label, 1)
+        outer.addWidget(self.local_row)
+
         # 加载占位 / 播放器 两态
         self.stack = QStackedWidget()
         self.stack.setStyleSheet("QStackedWidget { background: transparent; }")
@@ -208,6 +268,8 @@ class PreviewPanel(QWidget):
         self.loading_label = QLabel("正在加载预览…")
         self.loading_label.setProperty("muted", True)
         self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 占位区与视频区同高，避免加载→播放的面板高度跳变
+        self.loading_label.setMinimumHeight(240)
         load_lay.addWidget(self.loading_label)
         self.stack.addWidget(loading_page)
 
@@ -217,29 +279,9 @@ class PreviewPanel(QWidget):
         player_lay.setContentsMargins(0, 0, 0, 0)
         player_lay.setSpacing(8)
 
-        tool_row = QHBoxLayout()
-        tool_row.setSpacing(8)
-        self.open_btn = QPushButton("打开视频")
-        self.open_btn.setProperty("small", True)
-        self.open_btn.clicked.connect(self._open_local)
-        self.local_name_label = QLabel("未加载视频")
-        self.local_name_label.setProperty("muted", True)
-        self.local_name_label.setWordWrap(True)
-        self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("B站链接，回车在线预览")
-        self.url_input.setMaximumWidth(320)
-        self.url_input.returnPressed.connect(self._load_online)
-        self.load_btn = QPushButton("加载")
-        self.load_btn.setProperty("small", True)
-        self.load_btn.clicked.connect(self._load_online)
-        tool_row.addWidget(self.open_btn)
-        tool_row.addWidget(self.local_name_label, 1)
-        tool_row.addWidget(self.url_input)
-        tool_row.addWidget(self.load_btn)
-        player_lay.addLayout(tool_row)
-
-        self.video_widget = _PreviewVideoWidget()
-        self.video_widget.setMinimumHeight(240)
+        self.video_widget = _PreviewVideoWidget(
+            on_height_changed=self._on_video_height_changed
+        )
         player_lay.addWidget(self.video_widget, 1)
 
         # 播放控制条：深色半透明底 + 圆角主色进度条 + 圆润播放按钮 + 等宽时间
@@ -251,15 +293,15 @@ class PreviewPanel(QWidget):
         control_row.setContentsMargins(12, 8, 12, 8)
         control_row.setSpacing(10)
         self.play_btn = QPushButton("播放")
-        self.play_btn.setStyleSheet(_PLAY_BUTTON_QSS)
+        self.play_btn.setStyleSheet(_play_button_qss())
         self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.play_btn.clicked.connect(self._toggle_play)
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setRange(0, 0)
-        self.position_slider.setStyleSheet(_PLAY_SLIDER_QSS)
+        self.position_slider.setStyleSheet(_play_slider_qss())
         self.position_slider.sliderMoved.connect(self._seek)
         self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setStyleSheet(_TIME_LABEL_QSS)
+        self.time_label.setStyleSheet(_time_label_qss())
         control_row.addWidget(self.play_btn)
         control_row.addWidget(self.position_slider, 1)
         control_row.addWidget(self.time_label)
@@ -271,13 +313,32 @@ class PreviewPanel(QWidget):
         self._outer_layout = QVBoxLayout(self)
         self._outer_layout.setContentsMargins(0, 0, 0, 0)
         self._outer_layout.addWidget(card)
+        # 面板高度由内容决定（视频高度锁定后整体高度即确定），不参与纵向拉伸，
+        # 防止滚动区把面板压扁导致视频区被裁剪
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self._mode = 0
+        self._sync_rows()
+
+    def _sync_rows(self) -> None:
+        """工具行按模式显隐：在线=链接输入行，本地=文件选择行"""
+        self.online_row.setVisible(self._mode == 0)
+        self.local_row.setVisible(self._mode == 1)
+
+    def _on_video_height_changed(self) -> None:
+        """视频高度锁定后同步面板最小高度：与内容高度一致，不被布局压缩"""
+        self.setMinimumHeight(self.sizeHint().height())
+
+    def refresh_theme(self) -> None:
+        """主题切换回调：重放播放条内联样式（控制条本体为常驻深色媒体面，不反色）"""
+        self.play_btn.setStyleSheet(_play_button_qss())
+        self.position_slider.setStyleSheet(_play_slider_qss())
 
     # ---------------------------------------------------------------- 模式
 
     def _set_mode(self, index: int) -> None:
         """0=在线预览（播放代理流），1=本地预览（播放本地文件）"""
         self._mode = index
+        self._sync_rows()
         if index == 1:
             self.stack.setCurrentIndex(1)
             if self._player.source().isEmpty():
@@ -384,7 +445,6 @@ class PreviewPanel(QWidget):
         self._player.setSource(QUrl(f"http://127.0.0.1:{self._proxy_port}/stream"))
         self._player.play()
         self.stack.setCurrentIndex(1)
-        self.local_name_label.setText(f"在线预览 {self.url_input.text() or '视频'}")
         self.loading_label.setText("正在加载预览…")
 
     def _on_video_size_changed(self, *_args) -> None:

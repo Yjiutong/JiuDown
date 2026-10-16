@@ -102,9 +102,11 @@ def main() -> None:
 
     initialize_config()
 
-    # FFmpeg 缺失时后台自动拉取（完整版约 100MB，不阻塞启动；已存在则跳过）
+    # FFmpeg 完整版管理：仓库内置精简版；启动同步探测能力（UI 据此禁用
+    # 不可用选项），非完整版则后台下载完整版并校验后原子替换（不阻塞启动）
     import ffmpeg_manager
-    ffmpeg_manager.start_download()
+    ffmpeg_manager.prepare()
+    ffmpeg_manager.start_auto_upgrade()
 
     # 启动 asyncio 后台线程桥，并让 download_manager 的调度运行其上
     from async_bridge import async_bridge, patch_download_manager
@@ -118,21 +120,14 @@ def main() -> None:
 
     # 创建 Qt 应用与主窗口
     from PySide6.QtWidgets import QApplication
-    from PySide6.QtGui import QColor, QPalette
+    from theme import load_mode, theme_manager
 
     app = QApplication(sys.argv)
     app.setApplicationName("JiuDown Desktop")
     app.setStyle("Fusion")
 
-    # 统一浅色 palette：防止深色系统主题下无背景 QWidget 默认呈黑色
-    pal = app.palette()
-    pal.setColor(QPalette.ColorRole.Window, QColor("#f0f7f7"))
-    pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.Button, QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.Text, QColor("#1a2423"))
-    pal.setColor(QPalette.ColorRole.WindowText, QColor("#1a2423"))
-    pal.setColor(QPalette.ColorRole.ButtonText, QColor("#1a2423"))
-    app.setPalette(pal)
+    # 应用主题：固定浅色（产品决策：不跟随系统、不提供切换，见 theme.py 说明）
+    theme_manager.set_mode(load_mode(), persist=False)
 
     from main_window import MainWindow
     window = MainWindow()

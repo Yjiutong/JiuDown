@@ -5,9 +5,10 @@ B站视频链接批量输入、清晰度/格式/保存目录设置、多任务�
 
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
-    QAction, QActionGroup, QDesktopServices, QMouseEvent, QTextCursor,
+    QAction, QActionGroup, QColor, QDesktopServices, QMouseEvent, QPainter,
+    QPen, QTextCursor,
 )
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
@@ -17,14 +18,15 @@ from PySide6.QtWidgets import (
 
 from loguru import logger
 
+import ffmpeg_manager
 from config_manager import config_manager
 from download_manager import download_manager, download_log_manager
 from pages.preview_panel import PreviewPanel
 from theme import C
 
 QUALITIES = ["360P", "480P", "720P", "1080P"]
-FORMATS = ["mp4", "flv", "mp3"]  # mp3 = 纯音频（后缀名方式）
-AUDIO_FORMATS = {"mp3"}
+FORMATS = ["mp4", "flv", "mp3", "wav"]  # wav = 纯音频（需完整版 ffmpeg）
+AUDIO_FORMATS = {"mp3", "wav"}
 CHANNELS = ["单声道", "双声道"]
 
 STATUS_BADGE = {
@@ -37,14 +39,17 @@ STATUS_BADGE = {
     "cancelled": ("gray", "已取消"),
 }
 
-BADGE_COLORS = {
-    "gray": (C["gray_bg"], C["gray_dark"]),
-    "orange": (C["orange_bg"], C["orange_dark"]),
-    "blue": (C["blue_bg"], C["blue_dark"]),
-    "cyan": (C["cyan_bg"], C["cyan_dark"]),
-    "green": (C["green_bg"], C["green_dark"]),
-    "red": (C["red_bg"], C["red_dark"]),
-}
+def _badge_colors(tone: str) -> tuple[str, str]:
+    """徽章（背景, 文字）配色：按当前主题懒解析，跟随主题切换"""
+    table = {
+        "gray": (C["gray_bg"], C["gray_dark"]),
+        "orange": (C["orange_bg"], C["orange_dark"]),
+        "blue": (C["blue_bg"], C["blue_dark"]),
+        "cyan": (C["cyan_bg"], C["cyan_dark"]),
+        "green": (C["green_bg"], C["green_dark"]),
+        "red": (C["red_bg"], C["red_dark"]),
+    }
+    return table.get(tone, table["gray"])
 
 PROGRESS_COLOR = {
     "completed": "green",
@@ -66,6 +71,72 @@ class UrlInputEdit(QTextEdit):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+class _DeleteIconButton(QPushButton):
+    """自绘删除图标按钮（iPhone 美学）：圆头 × 双笔触 + 悬停/按下红底
+
+    不用文本 "×"：部分系统字体缺该字形会渲染成豆腐块；自绘同时获得
+    与标题栏按钮一致的悬停反馈。笔触在 48 画布上绘制（DPR=2），24px
+    显示尺寸下保持清晰。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("删除该标签")
+        self._hover = False
+        self._pressed = False
+
+    def enterEvent(self, event) -> None:
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.Left:
+            self._pressed = True
+            self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._pressed = False
+        self.update()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # 底色：常态透明 → 悬停淡红 → 按下加深
+        if self._pressed:
+            bg = QColor(C["red"])
+            bg.setAlphaF(0.18)
+        elif self._hover:
+            bg = QColor(C["red"])
+            bg.setAlphaF(0.10)
+        else:
+            bg = None
+        if bg is not None:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(self.rect(), 7, 7)
+        # 字形：圆头 ×（与导航图标统一的笔触重量 ≈ 画布 9%）
+        glyph = C["red_dark"] if self._pressed else (
+            C["red"] if self._hover else C["text_faint"]
+        )
+        pen = QPen(QColor(glyph), 4.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(16.5, 16.5), QPointF(31.5, 31.5))
+        p.drawLine(QPointF(31.5, 16.5), QPointF(16.5, 31.5))
+        p.end()
 
 
 class TagCard(QFrame):
@@ -102,11 +173,7 @@ class TagCard(QFrame):
         self.format_badge.setProperty("cssClass", "badgeCyan")
         self.quality_badge = QLabel(quality)
         self.quality_badge.setProperty("cssClass", "badgeGray")
-        delete_btn = QPushButton("×")
-        delete_btn.setProperty("small", True)
-        delete_btn.setProperty("danger", True)
-        delete_btn.setFixedSize(24, 24)
-        delete_btn.setToolTip("删除该标签")
+        delete_btn = _DeleteIconButton()
         delete_btn.clicked.connect(lambda: self.delete_requested.emit(self.url))
         row.addWidget(self.url_label, 1)
         row.addWidget(self.format_badge)
@@ -153,6 +220,10 @@ class TagCard(QFrame):
             act.setCheckable(True)
             act.setChecked(f == self.file_format)
             act.triggered.connect(lambda _=False, f=f: self._set_format(f))
+            # 当前 ffmpeg 做不到的格式置灰（如精简版的 flv / wav）
+            if not ffmpeg_manager.format_supported(f):
+                act.setEnabled(False)
+                act.setToolTip("当前 FFmpeg 无法输出该格式（完整版就绪后可用）")
             fmt_group.addAction(act)
             fmt_menu.addAction(act)
 
@@ -162,11 +233,16 @@ class TagCard(QFrame):
         param_menu = menu.addMenu(f"{param_title}: {self.quality}")
         param_group = QActionGroup(menu)
         param_group.setExclusive(True)
+        mono_ok = ffmpeg_manager.mono_supported()
         for p in items:
             act = QAction(p, menu)
             act.setCheckable(True)
             act.setChecked(p == self.quality)
             act.triggered.connect(lambda _=False, p=p: self._set_quality(p))
+            # 单声道需重采样滤波器（精简版缺，会降级为双声道）
+            if p == "单声道" and not mono_ok:
+                act.setEnabled(False)
+                act.setToolTip("当前 FFmpeg 不支持单声道重采样")
             param_group.addAction(act)
             param_menu.addAction(act)
 
@@ -293,7 +369,7 @@ class TaskCard(QFrame):
         )
 
     def _set_badge(self, tone: str, text: str) -> None:
-        bg, fg = BADGE_COLORS.get(tone, BADGE_COLORS["gray"])
+        bg, fg = _badge_colors(tone)
         self.badge_label.setText(text)
         self.badge_label.setStyleSheet(
             f"background: {bg}; color: {fg}; border-radius: 10px; padding: 2px 10px; font-size: 11px; font-weight: 600;"
@@ -366,7 +442,20 @@ class DownloadPage(QWidget):
         self._tag_cards: list[TagCard] = []
         self._tag_preview_url: str | None = None
         self._hover: "HoverPreview | None" = None
+        self._forced_fallback = False   # 格式是否因 ffmpeg 能力被强制回退过
         self._build_ui()
+
+        # FFmpeg 完整版就绪后重新门控格式/声道 + 同步提示条
+        ffmpeg_manager.signals.capabilities_changed.connect(
+            self._on_ffmpeg_capabilities_changed
+        )
+        ffmpeg_manager.signals.progress.connect(
+            lambda _p: self._refresh_ffmpeg_notice()
+        )
+        ffmpeg_manager.signals.finished.connect(
+            lambda _ok, _msg: self._refresh_ffmpeg_notice()
+        )
+        self._refresh_ffmpeg_notice()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_tasks)
@@ -427,6 +516,7 @@ class DownloadPage(QWidget):
         self.format_select.setMinimumWidth(90)
         self.format_select.currentIndexChanged.connect(self._sync_input_quality)
         option_row.addWidget(self.format_select)
+        self._apply_format_gating()
 
         self.dir_input = QLineEdit()
         self.dir_input.setText(config_manager.get_download_dir())
@@ -490,11 +580,25 @@ class DownloadPage(QWidget):
         layout.addWidget(input_card)
 
         # ---- 任务列表（随滚动区滚动） ----
-        self.empty_label = QLabel("暂无下载任务")
-        self.empty_label.setProperty("muted", True)
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setMinimumHeight(80)
-        layout.addWidget(self.empty_label)
+        self.empty_state = QFrame()
+        self.empty_state.setObjectName("emptyState")
+        self.empty_state.setMinimumHeight(150)
+        empty_lay = QVBoxLayout(self.empty_state)
+        empty_lay.setContentsMargins(24, 30, 24, 30)
+        empty_lay.setSpacing(6)
+        empty_title = QLabel("暂无下载任务")
+        empty_title.setProperty("cssClass", "emptyTitle")
+        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_hint = QLabel(
+            "粘贴 B 站链接后回车固定为标签，点击“开始”加入下载队列；"
+            "悬停标签可预览低清画面"
+        )
+        empty_hint.setProperty("cssClass", "emptyHint")
+        empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_hint.setWordWrap(True)
+        empty_lay.addWidget(empty_title)
+        empty_lay.addWidget(empty_hint)
+        layout.addWidget(self.empty_state)
 
         self.list_host = QWidget()
         self.list_host.setStyleSheet("background: transparent;")
@@ -511,6 +615,7 @@ class DownloadPage(QWidget):
         self._expanded_task: str | None = None
 
         self.page_scroll.setWidget(page_host)
+        outer.addWidget(self._build_ffmpeg_notice())
         outer.addWidget(self.page_scroll, 1)
         outer.addWidget(action_bar)  # 操作条固定在滚动区底部，滚动时始终可见
 
@@ -560,10 +665,31 @@ class DownloadPage(QWidget):
     def _remove_tag_card(self, card: TagCard) -> None:
         if card not in self._tag_cards:
             return
+        # 悬停小窗若锚定/预览此卡：随卡一同退场，否则小窗变孤儿弹窗滞留屏幕
+        hover = self._hover
+        if hover is not None and hover.isVisible() and hover.serving(card.url):
+            hover.hide_preview()
         self._tag_cards.remove(card)
         self.tag_layout.removeWidget(card)
         card.deleteLater()
         self._update_tag_hint()
+
+    def dismiss_hover(self) -> None:
+        """收起悬停低清小窗（页面切走/窗口最小化时调用，防孤儿弹窗滞留屏幕）"""
+        hover = self._hover
+        if hover is None:
+            return
+        try:
+            if hover.isVisible():
+                hover.hide_preview()
+        except RuntimeError:
+            # 解释器退出等场景下 C++ 对象可能已先销毁：清引用即可
+            self._hover = None
+
+    def hideEvent(self, event) -> None:
+        """页面被切走（侧边栏导航）时退掉悬停小窗，避免浮在其他页上方"""
+        self.dismiss_hover()
+        super().hideEvent(event)
 
     def _restore_tag(self, url: str) -> None:
         """双击标签：恢复为输入框中的文本链接"""
@@ -615,23 +741,12 @@ class DownloadPage(QWidget):
         return self._hover
 
     def _hover_tag(self, url: str) -> None:
-        """悬停 0.5s：在标签卡下方弹出低清小窗预览"""
+        """悬停 0.5s：在标签卡下方弹出低清小窗预览（左边缘对齐）"""
         hover = self._get_hover()
         hover.show_preview(url)
         card = self._find_tag(url)
         if card is not None:
-            gp = card.mapToGlobal(card.rect().bottomLeft())
-            x, y = gp.x() - 24, gp.y() + 8
-            screen = self.screen()
-            if screen is not None:
-                geo = screen.availableGeometry()
-                if x + hover.width() > geo.right():
-                    x = geo.right() - hover.width()
-                if y + hover.height() > geo.bottom():
-                    y = gp.y() - hover.height() - 8
-                x = max(x, geo.left())
-                y = max(y, geo.top())
-            hover.move(x, y)
+            hover.place_near(card)
         hover.show()
 
     def _hover_tag_leave(self) -> None:
@@ -652,7 +767,7 @@ class DownloadPage(QWidget):
             self.dir_input.setText(selected)
 
     def _sync_input_quality(self, *_args) -> None:
-        """输入区：格式切换为 mp3 时，质量下拉切换为声道选择（默认双声道）"""
+        """输入区：格式切换为纯音频时，质量下拉切换为声道选择（默认双声道）"""
         fmt = self.format_select.currentText()
         self.quality_select.blockSignals(True)
         if fmt in AUDIO_FORMATS:
@@ -668,6 +783,127 @@ class DownloadPage(QWidget):
                 if q in QUALITIES:
                     self.quality_select.setCurrentText(q)
         self.quality_select.blockSignals(False)
+        self._apply_quality_gating()
+
+    # ---------------------------------------------------------------- ffmpeg 能力门控
+
+    def _apply_format_gating(self) -> None:
+        """按当前 ffmpeg 能力禁用不可用格式（精简版无 flv/wav 封装器）"""
+        model = self.format_select.model()
+        for i in range(self.format_select.count()):
+            fmt = self.format_select.itemText(i)
+            supported = ffmpeg_manager.format_supported(fmt)
+            item = model.item(i)
+            if item is not None:
+                item.setEnabled(supported)
+            if supported:
+                self.format_select.setItemData(i, "", Qt.ItemDataRole.ToolTipRole)
+            else:
+                self.format_select.setItemData(
+                    i, f"当前 FFmpeg 无法输出 {fmt}（完整版就绪后可用）",
+                    Qt.ItemDataRole.ToolTipRole,
+                )
+        current = self.format_select.currentText()
+        if not ffmpeg_manager.format_supported(current):
+            # 当前所选格式不可用（如默认格式是 flv/wav 而 ffmpeg 为精简版）时回退
+            fallback = config_manager.get_default_format()
+            if not ffmpeg_manager.format_supported(fallback):
+                fallback = "mp4"
+            self.format_select.setCurrentText(fallback)
+            self._forced_fallback = True
+        elif self._forced_fallback:
+            # 完整版就绪后恢复被强制回退的配置默认格式
+            default_fmt = config_manager.get_default_format()
+            if (default_fmt in FORMATS and default_fmt != current
+                    and ffmpeg_manager.format_supported(default_fmt)):
+                self.format_select.setCurrentText(default_fmt)
+            self._forced_fallback = False
+
+    def _apply_quality_gating(self) -> None:
+        """纯音频格式下按 ffmpeg 能力禁用单声道（精简版缺重采样滤波器）"""
+        if self.format_select.currentText() not in AUDIO_FORMATS:
+            return
+        model = self.quality_select.model()
+        for i in range(self.quality_select.count()):
+            if self.quality_select.itemText(i) != "单声道":
+                continue
+            supported = ffmpeg_manager.mono_supported()
+            item = model.item(i)
+            if item is not None:
+                item.setEnabled(supported)
+            self.quality_select.setItemData(
+                i,
+                "" if supported else "当前 FFmpeg 不支持单声道重采样（将输出双声道）",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        if (self.quality_select.currentText() == "单声道"
+                and not ffmpeg_manager.mono_supported()):
+            self.quality_select.setCurrentText("双声道")
+
+    def _on_ffmpeg_capabilities_changed(self) -> None:
+        """完整版 FFmpeg 就绪/替换：重新门控格式与声道，并刷新提示条"""
+        self._apply_format_gating()
+        self._apply_quality_gating()
+        self._refresh_ffmpeg_notice()
+
+    def _refresh_ffmpeg_notice(self) -> None:
+        """同步 FFmpeg 完整版下载提示条（进度/失败/就绪）"""
+        if not hasattr(self, "ffmpeg_notice"):
+            return
+        state = ffmpeg_manager.get_status()
+        status = state["status"]
+        if status == "downloading":
+            percent = int(state.get("progress", 0) * 100)
+            self.ffmpeg_notice_text.setText(
+                f"正在下载完整版 FFmpeg（{percent}%）——flv / wav 与单声道将在就绪后解锁"
+            )
+            self.ffmpeg_notice_bar.setValue(percent)
+            self.ffmpeg_notice_retry.hide()
+            self.ffmpeg_notice.show()
+        elif status == "failed":
+            self.ffmpeg_notice_text.setText(
+                f"完整版 FFmpeg 下载失败：{state.get('error') or '网络异常'}"
+            )
+            self.ffmpeg_notice_bar.setValue(0)
+            self.ffmpeg_notice_retry.show()
+            self.ffmpeg_notice.show()
+        elif status == "lite":
+            self.ffmpeg_notice_text.setText(
+                "当前为精简版 FFmpeg：flv / wav 与单声道不可用"
+            )
+            self.ffmpeg_notice_bar.setValue(0)
+            self.ffmpeg_notice_retry.show()
+            self.ffmpeg_notice.show()
+        else:
+            # full / missing：missing 时首页状态卡负责提示，此处不占位
+            self.ffmpeg_notice.hide()
+
+    def _build_ffmpeg_notice(self) -> QFrame:
+        """FFmpeg 完整版下载提示条（精简版限时告知用户为何部分选项被禁用）"""
+        notice = QFrame()
+        notice.setObjectName("ffmpegNotice")
+        lay = QHBoxLayout(notice)
+        lay.setContentsMargins(12, 6, 10, 6)
+        lay.setSpacing(10)
+        self.ffmpeg_notice_text = QLabel("")
+        self.ffmpeg_notice_text.setObjectName("ffmpegNoticeText")
+        self.ffmpeg_notice_text.setWordWrap(True)
+        self.ffmpeg_notice_bar = QProgressBar()
+        self.ffmpeg_notice_bar.setFixedWidth(140)
+        self.ffmpeg_notice_bar.setTextVisible(False)
+        self.ffmpeg_notice_bar.setFixedHeight(6)
+        self.ffmpeg_notice_retry = QPushButton("重试")
+        self.ffmpeg_notice_retry.setProperty("small", True)
+        self.ffmpeg_notice_retry.clicked.connect(
+            lambda: (ffmpeg_manager.start_auto_upgrade(),
+                     self._refresh_ffmpeg_notice())
+        )
+        lay.addWidget(self.ffmpeg_notice_text, 1)
+        lay.addWidget(self.ffmpeg_notice_bar)
+        lay.addWidget(self.ffmpeg_notice_retry)
+        notice.hide()
+        self.ffmpeg_notice = notice
+        return notice
 
     def _add_tasks(self) -> None:
         text = self.url_input.toPlainText()
@@ -717,6 +953,10 @@ class DownloadPage(QWidget):
         if count:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(self, "提示", f"已清空 {count} 个任务")
+        self._refresh_tasks()
+
+    def refresh_theme(self) -> None:
+        """主题切换回调：重放任务卡内联颜色（徽章/详情文字）"""
         self._refresh_tasks()
 
     def _open_folder(self, task_id: str) -> None:
@@ -802,4 +1042,4 @@ class DownloadPage(QWidget):
                 card = self._cards.pop(task_id)
                 self.list_layout.removeWidget(card)
                 card.deleteLater()
-        self.empty_label.setVisible(not self._cards)
+        self.empty_state.setVisible(not self._cards)

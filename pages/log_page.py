@@ -189,6 +189,10 @@ class LogPage(QWidget):
                 f"color: {C['red_dark']}; font-size: 13px; font-weight: 600;"
             )
 
+    def refresh_theme(self) -> None:
+        """主题切换回调：重放状态标签内联颜色（日志面板为常驻深色控制台，不随主题反色）"""
+        self._update_button_states()
+
     def _run_core(self) -> None:
         self._append_core_log("正在启动核心...", "info")
         self._status_label.setText("核心状态: 正在启动...")

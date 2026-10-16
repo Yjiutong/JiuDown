@@ -5,22 +5,23 @@
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget,
+    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from loguru import logger
 
+import ffmpeg_manager
 from config_manager import config_manager
+from pages.download_page import FORMATS
 from pages.home_page import HomePage
 from pages.log_page import LogPage
-from theme import C
 
 LOG_LEVELS = ["info", "warning", "error", "debug", "silent"]
 QUALITIES = ["360P", "480P", "720P", "1080P"]
-FORMATS = ["mp4", "flv"]
 
 
 class SettingsPage(QWidget):
@@ -30,6 +31,16 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self._build_ui()
         self._load_settings()
+        # FFmpeg 完整版下载进度/就绪：同步设置页状态与默认格式门控
+        ffmpeg_manager.signals.progress.connect(
+            lambda _p: self._refresh_ffmpeg_status()
+        )
+        ffmpeg_manager.signals.finished.connect(
+            lambda _ok, _msg: self._refresh_ffmpeg_status()
+        )
+        ffmpeg_manager.signals.capabilities_changed.connect(
+            self._refresh_ffmpeg_status
+        )
 
     # ---------------------------------------------------------------- 构建
 
@@ -78,6 +89,13 @@ class SettingsPage(QWidget):
             )
         return button
 
+    def _make_hint_label(self, text: str) -> QLabel:
+        """分组内的说明小字"""
+        label = QLabel(text)
+        label.setProperty("cssClass", "sectionHint")
+        label.setWordWrap(True)
+        return label
+
     def _browse_dir(self, line_edit: QLineEdit, title: str) -> None:
         start = line_edit.text() or str(Path.home())
         selected = QFileDialog.getExistingDirectory(self, title, start)
@@ -105,20 +123,14 @@ class SettingsPage(QWidget):
         # 设置宿主页：五类设置分组 + 底部操作区
         settings_host = QWidget()
         settings_host.setObjectName("settingsHost")
-        # 实例级浅色背景（带选择器，不传播到子控件），防止深色系统主题下 QWidget 默认黑底
-        settings_host.setStyleSheet("QWidget#settingsHost { background: #f0f7f7; }")
+        # 背景由全局 QSS 的 QWidget#settingsHost / QTabWidget 规则按主题提供（零硬编码）
+
         settings_layout = QVBoxLayout(settings_host)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(12)
 
         self.settings_tabs = QTabWidget()
         self.settings_tabs.setObjectName("settingsTabs")
-        # 嵌套标签页兜底浅色背景（选择器规则，不传播到子控件）
-        self.settings_tabs.setStyleSheet(
-            "QTabWidget#settingsTabs { background: #f0f7f7; }"
-            "QTabWidget#settingsTabs::pane { background: #f0f7f7; }"
-            "QTabWidget#settingsTabs QStackedWidget { background: #f0f7f7; }"
-        )
         self.settings_tabs.addTab(self._build_basic_tab(), "基本设置")
         self.settings_tabs.addTab(self._build_download_tab(), "下载设置")
         self.settings_tabs.addTab(self._build_network_tab(), "网络设置")
@@ -204,6 +216,27 @@ class SettingsPage(QWidget):
             select_file=True, file_filter="可执行文件 (*.exe);;所有文件 (*)",
         ))
         card_vbox.addLayout(row)
+
+        # FFmpeg 版本状态 + 完整版下载（仓库内置精简版，功能受限）
+        ffmpeg_row = QHBoxLayout()
+        ffmpeg_row.setSpacing(10)
+        self.ffmpeg_status_label = QLabel("检测中…")
+        self.ffmpeg_status_label.setProperty("cssClass", "sectionHint")
+        self.ffmpeg_status_label.setWordWrap(True)
+        self.ffmpeg_progress = QProgressBar()
+        self.ffmpeg_progress.setFixedWidth(120)
+        self.ffmpeg_progress.setFixedHeight(6)
+        self.ffmpeg_progress.setTextVisible(False)
+        self.ffmpeg_download_btn = QPushButton("下载完整版")
+        self.ffmpeg_download_btn.clicked.connect(self._download_full_ffmpeg)
+        ffmpeg_row.addWidget(self.ffmpeg_status_label, 1)
+        ffmpeg_row.addWidget(self.ffmpeg_progress)
+        ffmpeg_row.addWidget(self.ffmpeg_download_btn)
+        card_vbox.addLayout(ffmpeg_row)
+        card_vbox.addWidget(self._make_hint_label(
+            "精简版仅支持 mp4 / mp3；完整版额外支持 flv / wav 与单声道，"
+            "启动时检测到精简版会自动在后台下载替换"
+        ))
         vbox.addWidget(card)
 
         card, card_vbox = self._section_card("下载限制")
@@ -409,6 +442,76 @@ class SettingsPage(QWidget):
         self.raw_access_token.setText(user.get("raw-access-token", ""))
         self.raw_cookies.setPlainText(user.get("raw-cookies", ""))
         self.hide_nickname.setChecked(bool(user.get("hide-nickname", False)))
+
+        self._apply_format_gating()
+        self._refresh_ffmpeg_status()
+
+    # ---------------------------------------------------------------- FFmpeg
+
+    def _apply_format_gating(self) -> None:
+        """默认格式下拉按当前 ffmpeg 能力禁用不可用项（与下载页一致）"""
+        model = self.default_format.model()
+        for i in range(self.default_format.count()):
+            fmt = self.default_format.itemText(i)
+            supported = ffmpeg_manager.format_supported(fmt)
+            item = model.item(i)
+            if item is not None:
+                item.setEnabled(supported)
+            self.default_format.setItemData(
+                i,
+                "" if supported else f"当前 FFmpeg 无法输出 {fmt}（完整版就绪后可用）",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        if not ffmpeg_manager.format_supported(self.default_format.currentText()):
+            if ffmpeg_manager.format_supported("mp4"):
+                self.default_format.setCurrentText("mp4")
+
+    def _refresh_ffmpeg_status(self) -> None:
+        """刷新 FFmpeg 状态行：完整版 / 精简版 / 下载中 / 失败 / 未找到"""
+        state = ffmpeg_manager.get_status()
+        status = state["status"]
+        version = state.get("version") or ""
+        if status == "downloading":
+            percent = int(state.get("progress", 0) * 100)
+            self.ffmpeg_status_label.setText(
+                f"正在下载完整版 FFmpeg… {percent}%（约 80MB，后台进行）"
+            )
+            self.ffmpeg_progress.setValue(percent)
+            self.ffmpeg_progress.show()
+            self.ffmpeg_download_btn.setEnabled(False)
+        elif status == "full":
+            self.ffmpeg_status_label.setText(
+                f"完整版 FFmpeg {version}：全部格式可用" if version
+                else "完整版 FFmpeg：全部格式可用"
+            )
+            self.ffmpeg_progress.hide()
+            self.ffmpeg_download_btn.setEnabled(False)
+            self.ffmpeg_download_btn.setText("已是完整版")
+        elif status == "lite":
+            self.ffmpeg_status_label.setText(
+                f"精简版 FFmpeg {version}：flv / wav 与单声道不可用"
+                if version else "精简版 FFmpeg：flv / wav 与单声道不可用"
+            )
+            self.ffmpeg_progress.hide()
+            self.ffmpeg_download_btn.setEnabled(True)
+            self.ffmpeg_download_btn.setText("下载完整版")
+        elif status == "failed":
+            self.ffmpeg_status_label.setText(
+                f"自动下载失败：{state.get('error') or '网络异常'}"
+            )
+            self.ffmpeg_progress.hide()
+            self.ffmpeg_download_btn.setEnabled(True)
+            self.ffmpeg_download_btn.setText("重试下载")
+        else:  # missing
+            self.ffmpeg_status_label.setText("未找到 FFmpeg，将自动下载完整版")
+            self.ffmpeg_progress.hide()
+            self.ffmpeg_download_btn.setEnabled(True)
+            self.ffmpeg_download_btn.setText("下载完整版")
+
+    def _download_full_ffmpeg(self) -> None:
+        """手动触发完整版下载（自动下载失败或用户主动升级时）"""
+        if ffmpeg_manager.start_auto_upgrade():
+            self._refresh_ffmpeg_status()
 
     def _collect_settings(self) -> dict:
         return {

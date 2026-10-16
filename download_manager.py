@@ -20,6 +20,10 @@ from log_manager import CoreLogManager
 
 download_log_manager = CoreLogManager("logs/download_log.txt")
 
+# 纯音频输出格式 → ffmpeg 音频编码器（wav 需完整版 ffmpeg，精简版无 pcm 编码器）
+_AUDIO_FORMATS = {"mp3", "wav"}
+_AUDIO_CODEC = {"mp3": "mp3", "wav": "pcm_s16le"}
+
 
 class BilibiliDownloadManager:
     """B站视频下载管理器"""
@@ -232,17 +236,18 @@ class BilibiliDownloadManager:
         output_path: Path,
         audio_only: bool = False,
         channels: int = 2,
+        audio_codec: str = "mp3",
     ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if not Path(ffmpeg_path).exists():
             raise RuntimeError(f"未找到FFmpeg: {ffmpeg_path}")
         if audio_only:
-            # 纯音频：仅输入音频流，按声道重编码为 mp3
+            # 纯音频：仅输入音频流，按声道重编码（mp3→libmp3lame，wav→pcm_s16le）
             # 注意：精简版 ffmpeg 缺少音频重采样，单声道(-ac 1)可能失败，
             # 失败时自动降级为双声道输出
             command = [
                 ffmpeg_path, "-y", "-i", str(video_path),
-                "-c:a", "mp3", "-ac", str(channels), "-vn", str(output_path),
+                "-c:a", audio_codec, "-ac", str(channels), "-vn", str(output_path),
             ]
             process = subprocess.run(
                 command,
@@ -255,7 +260,7 @@ class BilibiliDownloadManager:
                 logger.warning("单声道转换失败（精简版ffmpeg缺重采样），降级为双声道")
                 command = [
                     ffmpeg_path, "-y", "-i", str(video_path),
-                    "-c:a", "mp3", "-ac", "2", "-vn", str(output_path),
+                    "-c:a", audio_codec, "-ac", "2", "-vn", str(output_path),
                 ]
                 process = subprocess.run(
                     command,
@@ -438,8 +443,8 @@ class BilibiliDownloadManager:
             headers = self._headers(bvid)
             phase_callback = lambda tid, current_task: notify(tid, current_task)
 
-            # 纯音频（mp3）：只下载音频流并转码（按声道），跳过视频下载与合并
-            if output_format == "mp3":
+            # 纯音频（mp3/wav）：只下载音频流并转码（按声道），跳过视频下载与合并
+            if output_format in _AUDIO_FORMATS:
                 if not streams.get("audio_url"):
                     raise RuntimeError("该视频无独立音频流，无法下载纯音频")
                 channels = 1 if task.get("quality") == "单声道" else 2
@@ -453,7 +458,7 @@ class BilibiliDownloadManager:
                     phase_callback,
                 )
                 task["status"] = "merging"
-                task["message"] = "正在转换音频为 mp3..."
+                task["message"] = f"正在转换音频为 {output_format}..."
                 notify(task_id, task)
                 ffmpeg_path = config_manager.get_ffmpeg_path()
                 fell_back = await asyncio.to_thread(
@@ -464,6 +469,7 @@ class BilibiliDownloadManager:
                     output_path,
                     audio_only=True,
                     channels=channels,
+                    audio_codec=_AUDIO_CODEC.get(output_format, "mp3"),
                 )
                 audio_path.unlink(missing_ok=True)
                 task["status"] = "completed"

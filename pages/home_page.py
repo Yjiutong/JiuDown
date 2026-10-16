@@ -54,37 +54,49 @@ class HomePage(QWidget):
     # ---------------------------------------------------------------- FFmpeg
 
     def _on_ffmpeg_download(self) -> None:
-        ffmpeg_manager.start_download()
+        ffmpeg_manager.start_auto_upgrade()
         self._refresh_ffmpeg_state()
 
     def _refresh_ffmpeg_state(self) -> None:
-        """刷新 FFmpeg 卡片：已内置 / 下载中（进度）/ 未找到 / 拉取失败"""
+        """刷新 FFmpeg 卡片：完整版 / 精简版 / 下载中（进度）/ 拉取失败 / 未找到"""
         state = ffmpeg_manager.get_status()
-        if state["status"] == "ok":
-            self._ffmpeg_value.setText("已内置")
+        status = state["status"]
+        if status == "full":
+            self._ffmpeg_value.setText("已就绪")
             self._ffmpeg_value.setStyleSheet(f"color: {C['green_dark']};")
             version = state.get("version") or ""
             self._ffmpeg_sub.setText(
-                f"FFmpeg {version}（完整版）" if version else "音视频合并依赖"
+                f"FFmpeg {version}（完整版，全部格式可用）" if version else "完整版，全部格式可用"
             )
             self._ffmpeg_download_btn.hide()
-        elif state["status"] == "downloading":
+        elif status == "lite":
+            self._ffmpeg_value.setText("精简版")
+            self._ffmpeg_value.setStyleSheet(f"color: {C['orange_dark']};")
+            version = state.get("version") or ""
+            self._ffmpeg_sub.setText(
+                f"FFmpeg {version}（精简版）：flv / wav 与单声道不可用，正在后台下载完整版"
+                if version else
+                "精简版：flv / wav 与单声道不可用，正在后台下载完整版"
+            )
+            self._ffmpeg_download_btn.setText("下载完整版")
+            self._ffmpeg_download_btn.show()
+        elif status == "downloading":
             percent = int(state["progress"] * 100)
             self._ffmpeg_value.setText(f"下载中 {percent}%")
             self._ffmpeg_value.setStyleSheet(f"color: {C['brand']}; font-weight: 600;")
-            self._ffmpeg_sub.setText("正在自动拉取 FFmpeg（完整版约 100MB），完成后自动启用")
+            self._ffmpeg_sub.setText("正在自动拉取完整版 FFmpeg（约 80MB），完成后自动替换")
             self._ffmpeg_download_btn.hide()
-        elif state["status"] == "failed":
+        elif status == "failed":
             self._ffmpeg_value.setText("拉取失败")
             self._ffmpeg_value.setStyleSheet(f"color: {C['red_dark']};")
             self._ffmpeg_sub.setText("自动下载失败，可重试，或手动下载后放入 resources 目录")
             self._ffmpeg_download_btn.setText("重试下载")
             self._ffmpeg_download_btn.show()
-        else:  # idle / missing
+        else:  # missing
             self._ffmpeg_value.setText("未找到")
             self._ffmpeg_value.setStyleSheet(f"color: {C['red_dark']};")
-            self._ffmpeg_sub.setText("首次使用将自动下载，也可手动放入 resources 目录")
-            self._ffmpeg_download_btn.setText("下载 FFmpeg")
+            self._ffmpeg_sub.setText("首次使用将自动下载完整版，也可手动放入 resources 目录")
+            self._ffmpeg_download_btn.setText("下载完整版")
             self._ffmpeg_download_btn.show()
 
     # ---------------------------------------------------------------- UI
@@ -253,6 +265,7 @@ class HomePage(QWidget):
         # 配置文件状态
         config_file_path = config_manager.get_config_file_path()
         config_exists = config_file_path.exists()
+        self._config_exists = config_exists
         if config_exists:
             self._config_label.setText(f"配置文件已存在: {config_file_path}")
             self._config_label.setStyleSheet(f"color: {C['green_dark']}; font-size: 12px;")
@@ -271,6 +284,7 @@ class HomePage(QWidget):
         if not result.get("exists"):
             self._file_value.setText(f"{self._core_filename}\n(未找到)")
             self._file_value.setStyleSheet(f"color: {C['red_dark']};")
+            self._file_tone = "red_dark"
             self._file_sub.setText("状态: 核心文件不存在")
             self._set_badge("red", "文件缺失")
             self._official_hash_label.setText("官方 Hash: —")
@@ -281,6 +295,7 @@ class HomePage(QWidget):
         elif result.get("valid"):
             self._file_value.setText(f"{self._core_filename}\n(已找到)")
             self._file_value.setStyleSheet(f"color: {C['green_dark']};")
+            self._file_tone = "green_dark"
             self._file_sub.setText("状态: Hash 校验通过，文件完整")
             self._set_badge("green", "验证通过")
             self._official_hash_label.setText(f"官方 Hash: {result.get('official_hash', '—')}")
@@ -291,6 +306,7 @@ class HomePage(QWidget):
         else:
             self._file_value.setText(f"{self._core_filename}\n(已找到)")
             self._file_value.setStyleSheet(f"color: {C['orange_dark']};")
+            self._file_tone = "orange_dark"
             self._file_sub.setText(f"状态: {result.get('message', 'Hash 校验失败')}")
             self._set_badge("orange", "需要更新")
             self._official_hash_label.setText(f"官方 Hash: {result.get('official_hash', '无法获取')}")
@@ -322,6 +338,27 @@ class HomePage(QWidget):
         self._hash_badge.setText(text)
         self._hash_badge.style().unpolish(self._hash_badge)
         self._hash_badge.style().polish(self._hash_badge)
+
+    def refresh_theme(self) -> None:
+        """主题切换回调：重放本页内联动态颜色"""
+        hash_label_style = (
+            f"font-family: 'Cascadia Code','Consolas',monospace;"
+            f" font-size: 12px; color: {C['text_secondary']};"
+        )
+        self._official_hash_label.setStyleSheet(hash_label_style)
+        self._local_hash_label.setStyleSheet(hash_label_style)
+        self._config_label.setStyleSheet(
+            f"color: {C['green_dark'] if self._config_exists else C['red_dark']};"
+            f" font-size: 12px;"
+        )
+        file_tone = getattr(self, "_file_tone", None)
+        if file_tone:
+            self._file_value.setStyleSheet(f"color: {C[file_tone]};")
+        self._progress_speed.setStyleSheet(f"color: {C['blue_dark']}; font-size: 12px;")
+        self._progress_eta.setStyleSheet(f"color: {C['green_dark']}; font-size: 12px;")
+        # 状态类颜色统一从当前主题重新取色
+        self._refresh_ffmpeg_state()
+        self._refresh_core_status()
 
     # ---------------------------------------------------------------- 下载
 
