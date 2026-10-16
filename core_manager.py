@@ -2,6 +2,7 @@ import requests
 import asyncio
 import os
 import platform
+import shutil
 import yaml
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
@@ -43,6 +44,68 @@ class CoreManager:
             return Path.home() / '.config' / 'JiJiDown' / 'config.yaml'
         else:
             return Path.home() / '.config' / 'JiJiDown' / 'config.yaml'
+
+    @staticmethod
+    def _is_reparse_point(path: Path) -> bool:
+        """判断路径是否为 reparse point（junction/符号链接）。
+        注意：Windows junction 对 os.path.islink 可能返回 False，必须检查
+        FILE_ATTRIBUTE_REPARSE_POINT (0x400)，否则会误把 junction 当真实目录递归删除。
+        """
+        try:
+            st = os.lstat(str(path))
+            attrs = getattr(st, 'st_file_attributes', 0)
+            return bool(attrs & 0x400)
+        except OSError:
+            return False
+
+    def ensure_portable_core_dir(self) -> Path:
+        """便携模式：把核心硬编码的 %APPDATA%\\JiJiDown 通过目录联接（junction）重定向到
+        应用 config\\core-data，使核心的读写全部落在应用目录，AppData 中不存放数据。
+        仅 Windows 需要处理（核心硬编码路径）；其他平台核心路径本就在 home 下。
+        """
+        if platform.system() != 'Windows':
+            return Path(self.get_core_config_path()).parent
+        target = Path(system_info.get_config_dir()) / 'core-data'
+        target.mkdir(parents=True, exist_ok=True)
+        link = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming')) / 'JiJiDown'
+        try:
+            if self._is_reparse_point(link):
+                # 已是 junction/符号链接：若指向别处则重建指向 target
+                try:
+                    existing_target = os.readlink(link)
+                except OSError:
+                    existing_target = ''
+                if os.path.normcase(str(existing_target)) != os.path.normcase(str(target)):
+                    os.rmdir(link)  # 仅移除链接本身，不影响目标内容
+                    self._create_junction(link, target)
+            elif link.exists():
+                # 真实目录（旧版本遗留数据）：迁移内容到 target 后删除并重建链接
+                for item in link.iterdir():
+                    dest = target / item.name
+                    if not dest.exists():
+                        if item.is_dir():
+                            shutil.copytree(item, dest, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(item, dest)
+                shutil.rmtree(link, ignore_errors=True)
+                self._create_junction(link, target)
+            else:
+                self._create_junction(link, target)
+        except Exception as e:
+            logger.warning(f"核心目录重定向失败（将直接写入 AppData）: {e}")
+        return target
+
+    @staticmethod
+    def _create_junction(link: Path, target: Path) -> None:
+        """通过 mklink /J 创建目录联接（普通用户权限即可，不需要管理员）"""
+        subprocess.run(
+            ['cmd', '/c', 'mklink', '/J', str(link), str(target)],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
     def _build_core_config(self, app_config: Dict[str, Any]) -> Dict[str, Any]:
         """从应用配置构造核心兼容配置（剔除应用特有字段，避免核心解析失败）"""
@@ -132,7 +195,7 @@ class CoreManager:
                 'message': '核心文件不存在'
             }
         
-        # 获取官方hash值（官网 hash 表使用官方文件名，本地文件使用 SHOUDown 品牌名）
+        # 获取官方hash值（官网 hash 表使用官方文件名，本地文件使用 JiuDown 品牌名）
         official_filename = system_info.get_official_core_filename()
         official_hash = self.get_official_hash(official_filename)
         hash_source = 'official'
@@ -403,7 +466,9 @@ class CoreManager:
                 logger.error(f"配置文件不存在: {config_path}")
                 return False
             
-            # 同步核心配置到核心硬编码路径（%APPDATA%\JiJiDown\config.yaml）
+            # 便携模式：先把核心硬编码路径重定向到应用目录（junction），再同步核心配置
+            self.ensure_portable_core_dir()
+            # 同步核心配置到核心硬编码路径（%APPDATA%\JiJiDown\config.yaml，经 junction 落在应用目录）
             self._sync_core_config(config_file_path)
             
             # 检查是否已经有同名进程在运行（额外的安全措施）
@@ -412,13 +477,15 @@ class CoreManager:
                 return False
             
             # 创建子进程运行核心
+            # CREATE_NO_WINDOW：windowed 打包下不弹出核心的控制台窗口
             self.core_process = subprocess.Popen(
                 [str(core_path), '', str(config_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             
             self.is_running = True

@@ -64,13 +64,13 @@ class Router:
     
     def create_navigation_header(self):
         """创建导航头部"""
-        with ui.header().classes('shoudown-header items-center justify-between px-5'):
+        with ui.header().classes('jiudown-header items-center justify-between px-5'):
             # 应用标题
             with ui.row().classes('items-center gap-2'):
                 with ui.row().classes('items-center gap-2'):
-                    ui.icon('rocket_launch', size='24px').classes('shoudown-logo-icon')
-                    ui.label('SHOUDown Desktop').classes('text-base font-bold text-white tracking-wide')
-                ui.label('B站视频下载工具').classes('shoudown-header-sub')
+                    ui.icon('rocket_launch', size='24px').classes('jiudown-logo-icon')
+                    ui.label('JiuDown Desktop').classes('text-base font-bold text-white tracking-wide')
+                ui.label('B站视频下载工具').classes('jiudown-header-sub')
             
             # 导航菜单
             with ui.row().classes('items-center gap-1'):
@@ -82,7 +82,7 @@ class Router:
                         icon=route_info['icon'],
                         on_click=lambda p=path: self.navigate_to(p)
                     ).props('flat dense no-caps').classes(
-                        f"shoudown-nav-btn {'active' if is_active else ''}"
+                        f"jiudown-nav-btn {'active' if is_active else ''}"
                     )
     
     def create_content_area(self):
@@ -101,9 +101,9 @@ class Router:
             """主SPA页面"""
             ui.add_css("""
             body { background: #f5f6f8; }
-            .shoudown-header { background: #111827; border-bottom: 1px solid #1f2937; min-height: 54px; }
-            .shoudown-nav-btn { color: #cbd5e1; border-radius: 8px !important; margin: 0 2px; }
-            .shoudown-nav-btn.active { background: #2563eb !important; color: white !important; }
+            .jiudown-header { background: #111827; border-bottom: 1px solid #1f2937; min-height: 54px; }
+            .jiudown-nav-btn { color: #cbd5e1; border-radius: 8px !important; margin: 0 2px; }
+            .jiudown-nav-btn.active { background: #2563eb !important; color: white !important; }
             .page-container { padding: 24px 28px; max-width: 1280px; width: 100%; box-sizing: border-box; }
             .page-heading { font-size: 24px; font-weight: 700; color: #111827; }
             .status-card, .download-task-card {

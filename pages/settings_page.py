@@ -106,7 +106,7 @@ class SettingsPage(QWidget):
         settings_host = QWidget()
         settings_host.setObjectName("settingsHost")
         # 实例级浅色背景（带选择器，不传播到子控件），防止深色系统主题下 QWidget 默认黑底
-        settings_host.setStyleSheet("QWidget#settingsHost { background: #f5f7fa; }")
+        settings_host.setStyleSheet("QWidget#settingsHost { background: #f0f7f7; }")
         settings_layout = QVBoxLayout(settings_host)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(12)
@@ -115,9 +115,9 @@ class SettingsPage(QWidget):
         self.settings_tabs.setObjectName("settingsTabs")
         # 嵌套标签页兜底浅色背景（选择器规则，不传播到子控件）
         self.settings_tabs.setStyleSheet(
-            "QTabWidget#settingsTabs { background: #f5f7fa; }"
-            "QTabWidget#settingsTabs::pane { background: #f5f7fa; }"
-            "QTabWidget#settingsTabs QStackedWidget { background: #f5f7fa; }"
+            "QTabWidget#settingsTabs { background: #f0f7f7; }"
+            "QTabWidget#settingsTabs::pane { background: #f0f7f7; }"
+            "QTabWidget#settingsTabs QStackedWidget { background: #f0f7f7; }"
         )
         self.settings_tabs.addTab(self._build_basic_tab(), "基本设置")
         self.settings_tabs.addTab(self._build_download_tab(), "下载设置")

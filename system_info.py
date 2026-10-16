@@ -18,14 +18,14 @@ CORE_PLATFORM_FILENAMES = {
     'linux-amd64': 'JiJiDownCore-linux-amd64',
 }
 
-# 本地核心文件名（SHOUDown 品牌名，下载后保存为该名称）
+# 本地核心文件名（JiuDown 品牌名，下载后保存为该名称）
 CORE_LOCAL_FILENAMES = {
-    'windows-64': 'SHOUDownCore-win64.exe',
-    'windows-32': 'SHOUDownCore-win32.exe',
-    'darwin-arm64': 'SHOUDownCore-darwin-arm64',
-    'darwin-amd64': 'SHOUDownCore-darwin-amd64',
-    'linux-arm64': 'SHOUDownCore-linux-arm64',
-    'linux-amd64': 'SHOUDownCore-linux-amd64',
+    'windows-64': 'JiuDownCore-win64.exe',
+    'windows-32': 'JiuDownCore-win32.exe',
+    'darwin-arm64': 'JiuDownCore-darwin-arm64',
+    'darwin-amd64': 'JiuDownCore-darwin-amd64',
+    'linux-arm64': 'JiuDownCore-linux-arm64',
+    'linux-amd64': 'JiuDownCore-linux-amd64',
 }
 
 
@@ -79,7 +79,7 @@ class SystemInfo:
             return 'windows-64'
     
     def get_core_filename(self) -> str:
-        """根据操作系统和架构返回本地核心文件名（SHOUDown 品牌）"""
+        """根据操作系统和架构返回本地核心文件名（JiuDown 品牌）"""
         return CORE_LOCAL_FILENAMES[self._core_platform_key()]
     
     def get_official_core_filename(self) -> str:
@@ -87,17 +87,8 @@ class SystemInfo:
         return CORE_PLATFORM_FILENAMES[self._core_platform_key()]
     
     def get_config_dir(self) -> Path:
-        """获取配置目录路径"""
-        system = platform.system()
-        
-        if system == 'Windows':
-            config_dir = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming')) / 'SHOUDown'
-        elif system == 'Darwin':  # macOS
-            config_dir = Path.home() / '.config' / 'SHOUDown'
-        else:  # Linux
-            config_dir = Path.home() / '.config' / 'SHOUDown'
-        
-        return config_dir
+        """获取配置目录路径（便携模式：位于程序目录下，不写入系统 AppData）"""
+        return self._get_runtime_base_dir() / 'config'
     
     def _get_runtime_base_dir(self) -> Path:
         """获取程序运行基础目录，打包后使用exe所在目录"""

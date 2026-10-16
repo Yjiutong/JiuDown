@@ -230,23 +230,61 @@ class BilibiliDownloadManager:
         video_path: Path,
         audio_path: Path,
         output_path: Path,
+        audio_only: bool = False,
+        channels: int = 2,
     ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if not Path(ffmpeg_path).exists():
             raise RuntimeError(f"未找到FFmpeg: {ffmpeg_path}")
-        command = [ffmpeg_path, "-y", "-i", str(video_path)]
-        if audio_path and Path(audio_path).exists():
-            command += ["-i", str(audio_path)]
-        command += ["-c", "copy", str(output_path)]
-        process = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=60 * 60,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if process.returncode != 0:
-            raise RuntimeError(f"FFmpeg合并失败: {process.stderr[-500:]}")
+        if audio_only:
+            # 纯音频：仅输入音频流，按声道重编码为 mp3
+            # 注意：精简版 ffmpeg 缺少音频重采样，单声道(-ac 1)可能失败，
+            # 失败时自动降级为双声道输出
+            command = [
+                ffmpeg_path, "-y", "-i", str(video_path),
+                "-c:a", "mp3", "-ac", str(channels), "-vn", str(output_path),
+            ]
+            process = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=60 * 60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if process.returncode != 0 and channels != 2:
+                logger.warning("单声道转换失败（精简版ffmpeg缺重采样），降级为双声道")
+                command = [
+                    ffmpeg_path, "-y", "-i", str(video_path),
+                    "-c:a", "mp3", "-ac", "2", "-vn", str(output_path),
+                ]
+                process = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=60 * 60,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                if process.returncode != 0:
+                    raise RuntimeError(f"FFmpeg合并失败: {process.stderr[-500:]}")
+                return True  # 已降级为双声道
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg合并失败: {process.stderr[-500:]}")
+            return False  # 按请求声道正常完成
+        else:
+            command = [ffmpeg_path, "-y", "-i", str(video_path)]
+            if audio_path and Path(audio_path).exists():
+                command += ["-i", str(audio_path)]
+            command += ["-c", "copy", str(output_path)]
+            process = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=60 * 60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg合并失败: {process.stderr[-500:]}")
+            return False
 
     def get_task(self, task_id: str) -> Optional[dict]:
         return self.tasks.get(task_id)
@@ -399,6 +437,45 @@ class BilibiliDownloadManager:
 
             headers = self._headers(bvid)
             phase_callback = lambda tid, current_task: notify(tid, current_task)
+
+            # 纯音频（mp3）：只下载音频流并转码（按声道），跳过视频下载与合并
+            if output_format == "mp3":
+                if not streams.get("audio_url"):
+                    raise RuntimeError("该视频无独立音频流，无法下载纯音频")
+                channels = 1 if task.get("quality") == "单声道" else 2
+                await asyncio.to_thread(
+                    self._download_file,
+                    streams["audio_url"],
+                    audio_path,
+                    headers,
+                    task_id,
+                    "音频流",
+                    phase_callback,
+                )
+                task["status"] = "merging"
+                task["message"] = "正在转换音频为 mp3..."
+                notify(task_id, task)
+                ffmpeg_path = config_manager.get_ffmpeg_path()
+                fell_back = await asyncio.to_thread(
+                    self._merge_streams,
+                    ffmpeg_path,
+                    audio_path,
+                    None,
+                    output_path,
+                    audio_only=True,
+                    channels=channels,
+                )
+                audio_path.unlink(missing_ok=True)
+                task["status"] = "completed"
+                task["progress"] = 100
+                task["message"] = f"下载完成: {output_path}" + (
+                    "（单声道转换不可用，已输出双声道）" if fell_back else ""
+                )
+                task["output_path"] = str(output_path)
+                download_log_manager.save_log(f"[下载] 下载完成: {output_path}")
+                notify(task_id, task)
+                return
+
             await asyncio.to_thread(
                 self._download_file,
                 streams["video_url"],

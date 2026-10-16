@@ -26,8 +26,8 @@ LEVEL_COLORS = {
     "fata": "#fca5a5",
     "warning": "#fbbf24",
     "success": "#4ade80",
-    "info": "#60a5fa",
-    "debug": "#94a3b8",
+    "info": "#39C5BB",
+    "debug": "#9bb0b2",
 }
 
 MAX_LOG_BLOCKS = 5000

@@ -1,10 +1,10 @@
-# SHOUDown Desktop
+# JiuDown（玖号下载器）
 
-SHOUDown 桌面版 - 基于Python的现代化B站视频下载工具
+JiuDown 桌面版（玖号下载器） - 基于Python的现代化B站视频下载工具
 
 ## 项目简介
 
-SHOUDown Desktop 是一个基于 Python 开发的 B 站视频下载桌面应用，采用 PySide6（Qt）构建原生桌面界面，支持多平台运行，提供直观的操作体验。
+JiuDown（玖号下载器）是一个基于 Python 开发的 B 站视频下载桌面应用，采用 PySide6（Qt）构建原生桌面界面，支持多平台运行，提供直观的操作体验。
 
 本项目 **fork 自开源项目 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（唧唧下载器桌面版）**，并在此基础上修改完善，包括界面重构、架构升级与功能增强。
 
@@ -12,7 +12,7 @@ SHOUDown Desktop 是一个基于 Python 开发的 B 站视频下载桌面应用�
 
 本项目 fork 自 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（原项目：JiJiDown Desktop，唧唧下载器桌面版，作者 o5-null），并在其基础上修改完善：
 
-- **核心组件**：沿用上游的 [JiJiDownCore](https://jj.紫灵.top/PC/ReWPF/core/) 作为 B 站视频下载核心（本地以 SHOUDownCore-* 命名保存）
+- **核心组件**：沿用上游的 [JiJiDownCore](https://jj.紫灵.top/PC/ReWPF/core/) 作为 B 站视频下载核心（本地以 JiuDownCore-* 命名保存）
 - **界面重构**：由原始 NiceGUI Web 界面重构为 PySide6 (Qt) 原生桌面应用
 - **架构升级**：新增 asyncio 后台线程桥、模块化页面结构、QSS 统一设计规范
 - **功能完善**：多任务并发调度、断点续传、批量下载、状态监控、日志管理等
@@ -60,8 +60,8 @@ SHOUDown Desktop 是一个基于 Python 开发的 B 站视频下载桌面应用�
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/Yjiutong/SHOUDown.git
-cd SHOUDown
+git clone https://github.com/Yjiutong/JiuDown.git
+cd JiuDown
 ```
 
 ### 2. 安装依赖
@@ -79,7 +79,7 @@ python app.py
 ## 项目结构
 
 ```
-SHOUDown/
+JiuDown/
 ├── app.py                 # 主程序入口（PySide6）
 ├── main_window.py         # 主窗口（侧边导航 + 页面栈）
 ├── theme.py               # QSS 主题与配色常量
@@ -154,10 +154,16 @@ asyncio 后台线程桥，让基于 asyncio 的下载调度与 Qt 事件循环�
 
 ## 配置说明
 
-### 配置文件位置
-- **Windows**: `%APPDATA%\SHOUDown\config.yaml`
-- **macOS**: `~/.config/SHOUDown/config.yaml`
-- **Linux**: `~/.config/SHOUDown/config.yaml`
+### 配置文件位置（便携模式）
+程序采用**便携模式**，所有数据均存放在程序目录（exe 所在目录）下，**不写入系统 AppData**：
+
+- **配置**: `<程序目录>/config/config.yaml`
+- **日志**: `<程序目录>/logs/`
+- **临时文件**: `<程序目录>/TEMP/`
+- **下载目录**: `<程序目录>/Download/`
+- **核心文件**: `<程序目录>/resources/`
+
+> 说明：核心程序（JiuDownCore）自身硬编码读取 `%APPDATA%\JiJiDown\config.yaml`，为保持便携，应用启动时会通过 Windows 目录联接（junction）把该路径重定向到 `<程序目录>/config/core-data/`，核心的实际读写全部落在应用目录，AppData 中仅保留一个链接条目、不存放任何数据。旧版本写入 `%APPDATA%\JiuDown` 的配置会在首次启动时自动迁移到便携目录并清理旧目录。
 
 ### 主要配置项
 
@@ -204,9 +210,17 @@ download-task:
 
 ### 下载操作
 1. 在应用界面输入B站视频链接（支持批量，每行一个）
-2. 选择下载质量和格式
+2. 选择下载格式与质量：
+   - 视频：`mp4` / `flv` + 清晰度（360P/480P/720P/1080P）
+   - 纯音频：`mp3`（后缀名方式），选择后质量位切换为声道（单声道/双声道，默认双声道）
 3. 设置保存路径
-4. 点击「添加下载」并查看实时进度
+4. 点击「开始」并查看实时进度
+
+> 说明：完整版 FFmpeg（约 100MB）**不随仓库分发**。首次启动或缺失时应用会在后台自动拉取（源：gyan.dev essentials 构建），下载完成后自动启用；也可手动下载后放入 `resources\ffmpeg.exe`。状态总览页可查看下载进度或手动触发下载。
+
+### 后台下载与退出
+- 关闭窗口时若仍有未完成任务，应用会隐藏到**系统托盘**继续后台下载，全部任务完成后自动退出
+- 托盘菜单可「显示主窗口」或「退出」；退出时自动清理核心进程，无残留
 
 ## 常见问题
 
@@ -220,7 +234,7 @@ A: 可能是文件损坏，请删除 `resources` 目录下的核心文件，重�
 A: 在「设置」页的下载设置中修改下载目录，或直接编辑配置文件。
 
 ### Q: 支持哪些视频格式？
-A: 支持B站所有公开的视频格式，包括MP4、FLV等。
+A: 支持B站所有公开的视频格式，包括MP4、FLV等；另支持纯音频 `mp3` 下载（可选单声道/双声道）。
 
 ### Q: 如何查看详细日志？
 A: 日志文件保存在 `logs` 目录下，按日期分割。
@@ -313,7 +327,7 @@ python -m pdb main.py
 - ✅ 全新界面：侧边导航 + 页面栈，QSS 统一设计规范
 - ✅ asyncio 后台线程桥：下载调度与 UI 事件循环共存
 - ✅ 现代视觉：状态卡片、彩色状态徽章、圆角进度条、分组表单
-- ✅ 名称统一：应用名称统一为 SHOUDown，核心文件本地以 SHOUDownCore 命名
+- ✅ 名称统一：应用名称统一为 JiuDown，核心文件本地以 JiuDownCore 命名
 - ✅ 明确 fork 关系：文档注明本项目 fork 自 JiJiDownForDesktop 并修改完善
 
 ### v1.0.0 (2024-11-12)
@@ -326,8 +340,8 @@ python -m pdb main.py
 
 ## 联系方式
 
-- **项目主页**: [GitHub Repository](https://github.com/Yjiutong/SHOUDown)
-- **问题反馈**: [GitHub Issues](https://github.com/Yjiutong/SHOUDown/issues)
+- **项目主页**: [GitHub Repository](https://github.com/Yjiutong/JiuDown)
+- **问题反馈**: [GitHub Issues](https://github.com/Yjiutong/JiuDown/issues)
 - **邮箱**: your-email@example.com
 
 ## 致谢

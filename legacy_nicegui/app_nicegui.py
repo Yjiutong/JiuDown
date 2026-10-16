@@ -48,7 +48,7 @@ def main():
 
     # 设置UI启动参数
     ui.run(
-        title='SHOUDown Desktop',
+        title='JiuDown Desktop',
         favicon='🚀',
         reload=False,
         port=0,

@@ -7,7 +7,7 @@
 import html as html_mod
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout, QWidget,
 )
@@ -19,6 +19,7 @@ from core_manager import core_manager
 from core_status import get_core_status, update_core_status
 from system_info import system_info
 from async_bridge import async_bridge
+import ffmpeg_manager
 from theme import C
 
 CORE_BASE_URL = "https://jj.紫灵.top/PC/ReWPF/core/"
@@ -47,7 +48,44 @@ class HomePage(QWidget):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_core_status)
+        self._timer.timeout.connect(self._refresh_ffmpeg_state)
         self._timer.start(5000)
+
+    # ---------------------------------------------------------------- FFmpeg
+
+    def _on_ffmpeg_download(self) -> None:
+        ffmpeg_manager.start_download()
+        self._refresh_ffmpeg_state()
+
+    def _refresh_ffmpeg_state(self) -> None:
+        """刷新 FFmpeg 卡片：已内置 / 下载中（进度）/ 未找到 / 拉取失败"""
+        state = ffmpeg_manager.get_status()
+        if state["status"] == "ok":
+            self._ffmpeg_value.setText("已内置")
+            self._ffmpeg_value.setStyleSheet(f"color: {C['green_dark']};")
+            version = state.get("version") or ""
+            self._ffmpeg_sub.setText(
+                f"FFmpeg {version}（完整版）" if version else "音视频合并依赖"
+            )
+            self._ffmpeg_download_btn.hide()
+        elif state["status"] == "downloading":
+            percent = int(state["progress"] * 100)
+            self._ffmpeg_value.setText(f"下载中 {percent}%")
+            self._ffmpeg_value.setStyleSheet(f"color: {C['brand']}; font-weight: 600;")
+            self._ffmpeg_sub.setText("正在自动拉取 FFmpeg（完整版约 100MB），完成后自动启用")
+            self._ffmpeg_download_btn.hide()
+        elif state["status"] == "failed":
+            self._ffmpeg_value.setText("拉取失败")
+            self._ffmpeg_value.setStyleSheet(f"color: {C['red_dark']};")
+            self._ffmpeg_sub.setText("自动下载失败，可重试，或手动下载后放入 resources 目录")
+            self._ffmpeg_download_btn.setText("重试下载")
+            self._ffmpeg_download_btn.show()
+        else:  # idle / missing
+            self._ffmpeg_value.setText("未找到")
+            self._ffmpeg_value.setStyleSheet(f"color: {C['red_dark']};")
+            self._ffmpeg_sub.setText("首次使用将自动下载，也可手动放入 resources 目录")
+            self._ffmpeg_download_btn.setText("下载 FFmpeg")
+            self._ffmpeg_download_btn.show()
 
     # ---------------------------------------------------------------- UI
 
@@ -93,6 +131,17 @@ class HomePage(QWidget):
         self._file_value.setProperty("cssClass", "cardValueSmall")
         self._ffmpeg_card, self._ffmpeg_value, self._ffmpeg_sub = self._make_status_card("FFmpeg")
         self._ffmpeg_value.setProperty("cssClass", "cardValueSmall")
+        self._ffmpeg_btn_row = QHBoxLayout()
+        self._ffmpeg_btn_row.setSpacing(8)
+        self._ffmpeg_download_btn = QPushButton("下载 FFmpeg")
+        self._ffmpeg_download_btn.setProperty("small", True)
+        self._ffmpeg_download_btn.setProperty("primary", True)
+        self._ffmpeg_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ffmpeg_download_btn.clicked.connect(self._on_ffmpeg_download)
+        self._ffmpeg_btn_row.addWidget(self._ffmpeg_download_btn)
+        self._ffmpeg_btn_row.addStretch()
+        self._ffmpeg_card.layout().addLayout(self._ffmpeg_btn_row)
+        self._ffmpeg_download_btn.hide()
         self._system_card, self._system_value, self._system_sub = self._make_status_card("系统环境")
         self._system_value.setProperty("cssClass", "cardValueSmall")
 
@@ -198,14 +247,8 @@ class HomePage(QWidget):
         )
         self._system_sub.setText(f"机器类型: {sys_info.get('machine', '—')}")
 
-        # FFmpeg
-        ffmpeg_path = config_manager.get_ffmpeg_path()
-        ffmpeg_exists = bool(ffmpeg_path and Path(ffmpeg_path).exists())
-        self._ffmpeg_value.setText("已内置" if ffmpeg_exists else "未找到")
-        self._ffmpeg_value.setStyleSheet(
-            f"color: {C['green_dark']};" if ffmpeg_exists else f"color: {C['red_dark']};"
-        )
-        self._ffmpeg_sub.setText("音视频合并依赖")
+        # FFmpeg 状态（含自动拉取进度）
+        self._refresh_ffmpeg_state()
 
         # 配置文件状态
         config_file_path = config_manager.get_config_file_path()
@@ -296,7 +339,7 @@ class HomePage(QWidget):
         self._progress_speed.setText("")
         self._progress_eta.setText("")
 
-        # 官网下载源使用官方核心文件名，本地保存使用 SHOUDown 品牌名
+        # 官网下载源使用官方核心文件名，本地保存使用 JiuDown 品牌名
         download_url = CORE_BASE_URL + system_info.get_official_core_filename()
         save_path = str(system_info.get_default_paths()["resources_dir"])
         logger.info(f"开始下载核心文件: {download_url} -> {save_path}")
