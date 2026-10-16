@@ -10,6 +10,5 @@
 /resources
 /resources/*
 !/resources/
-!/resources/ffmpeg.exe
 /TEMP
 /__pycache__
