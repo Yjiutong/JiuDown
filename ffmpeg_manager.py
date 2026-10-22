@@ -14,6 +14,7 @@ UI 侧通过 format_supported() / mono_supported() 禁用当前 ffmpeg 做不到
 选项；完整版就绪后经 capabilities_changed 信号重新门控。
 """
 
+import json
 import os
 import re
 import shutil
@@ -82,6 +83,59 @@ _cap_cache = {"key": None, "caps": frozenset(), "version": ""}
 _cap_lock = threading.Lock()
 
 
+# ---------------------------------------------------------------- 能力磁盘缓存
+
+def _caps_cache_file() -> Path:
+    """能力探测结果磁盘缓存路径（与配置文件同目录，跨启动复用）"""
+    try:
+        return Path(config_manager.get_config_file_path()).parent / "ffmpeg_caps.json"
+    except Exception:
+        return Path(__file__).resolve().parent / "config" / "ffmpeg_caps.json"
+
+
+def _caps_key_dict(key) -> dict:
+    path, mtime_ns, size = key
+    return {"path": path, "mtime_ns": mtime_ns, "size": size}
+
+
+def _load_disk_caps(key):
+    """读取磁盘缓存；键不匹配（路径/时间/大小变化）返回 None
+
+    省掉每次启动 3 次 ffmpeg 子进程探测（完整版二进制加载约 0.5s）。
+    """
+    if key is None:
+        return None
+    try:
+        path = _caps_cache_file()
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("key") != _caps_key_dict(key):
+            return None
+        caps = frozenset(data.get("caps") or ())
+        return caps, str(data.get("version") or "")
+    except Exception:
+        return None
+
+
+def _save_disk_caps(key, caps, version: str) -> None:
+    """写入磁盘缓存（失败静默：缓存只是加速手段）"""
+    if key is None:
+        return
+    try:
+        path = _caps_cache_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({
+            "key": _caps_key_dict(key),
+            "version": version,
+            "caps": sorted(caps),
+        }, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------- 公共 API
 
 def get_ffmpeg_path() -> str:
@@ -116,8 +170,14 @@ def get_capabilities(refresh: bool = False) -> frozenset:
     if key is None:
         caps, version = frozenset(), ""
     else:
-        caps = _probe_capabilities(path)
-        version = _probe_version(path)
+        # 内存未命中 → 磁盘缓存（跨启动） → 实测探测
+        disk = None if refresh else _load_disk_caps(key)
+        if disk is not None:
+            caps, version = disk
+        else:
+            caps = _probe_capabilities(path)
+            version = _probe_version(path)
+            _save_disk_caps(key, caps, version)
     with _cap_lock:
         _cap_cache.update(key=key, caps=caps, version=version)
     return caps

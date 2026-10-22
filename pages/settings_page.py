@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
@@ -15,13 +15,14 @@ from PySide6.QtWidgets import (
 from loguru import logger
 
 import ffmpeg_manager
+import jiudown_engine
 from config_manager import config_manager
 from pages.download_page import FORMATS
 from pages.home_page import HomePage
 from pages.log_page import LogPage
 
 LOG_LEVELS = ["info", "warning", "error", "debug", "silent"]
-QUALITIES = ["360P", "480P", "720P", "1080P"]
+QUALITIES = jiudown_engine.QUALITY_CHOICES
 
 
 class SettingsPage(QWidget):
@@ -156,7 +157,11 @@ class SettingsPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        # 透明底由全局 QSS 的 QScrollArea 规则统一处理：不使用控件级 setStyleSheet，
+        # 避免样式级联污染滚动区内部弹出的菜单/提示气泡
+        # 内容页显式命名：由全局 QSS 以主题令牌上色（QWidget#settingsScrollPage），
+        # 不依赖视口的调色板回退——部分环境下回退底色与主题不一致（发黑）
+        content.setObjectName("settingsScrollPage")
         scroll.setWidget(content)
         return scroll
 
@@ -258,6 +263,36 @@ class SettingsPage(QWidget):
         ))
         vbox.addWidget(card)
 
+        # ---- JiuDown 下载引擎：双后端路由 + 版本与更新 ----
+        card, card_vbox = self._section_card(
+            "JiuDown 下载引擎",
+            "自带双后端：B 站走自研原生链路（快且可控），其余站点走 yt-dlp（1700+ 站点）"
+        )
+        self.engine_backend = QComboBox()
+        for key, text in jiudown_engine.BACKEND_LABELS.items():
+            self.engine_backend.addItem(text, key)
+        row = self._form_row("后端路由", self.engine_backend)
+        row.addStretch()
+        card_vbox.addLayout(row)
+        card_vbox.addWidget(self._make_hint_label(
+            "自动：B 站先走原生链路，失败自动降级 yt-dlp；"
+            "仅原生：B 站接口异常时可手动切到 yt-dlp 应急"
+        ))
+        engine_row = QHBoxLayout()
+        engine_row.setSpacing(10)
+        self.engine_status_label = QLabel("检测中…")
+        self.engine_status_label.setProperty("cssClass", "sectionHint")
+        self.engine_status_label.setWordWrap(True)
+        self.engine_update_btn = QPushButton("更新引擎")
+        self.engine_update_btn.clicked.connect(self._update_engine)
+        engine_row.addWidget(self.engine_status_label, 1)
+        engine_row.addWidget(self.engine_update_btn)
+        card_vbox.addLayout(engine_row)
+        card_vbox.addWidget(self._make_hint_label(
+            "站点改版导致解析失败时，更新引擎通常即可恢复（打包版请通过安装包升级）"
+        ))
+        vbox.addWidget(card)
+
         card, card_vbox = self._section_card("下载限制")
         self.max_tasks = QSpinBox()
         self.max_tasks.setRange(1, 5)
@@ -274,6 +309,15 @@ class SettingsPage(QWidget):
         row = self._form_row("默认格式", self.default_format)
         row.addStretch()
         card_vbox.addLayout(row)
+        self.playlist_limit = QSpinBox()
+        self.playlist_limit.setRange(1, 500)
+        self.playlist_limit.setSuffix(" 个")
+        row = self._form_row("播放列表最多下载", self.playlist_limit)
+        row.addStretch()
+        card_vbox.addLayout(row)
+        card_vbox.addWidget(self._make_hint_label(
+            "播放列表/合集链接的下载上限；1 = 只下载链接指向的单个视频"
+        ))
         self.speed_limit = QSpinBox()
         self.speed_limit.setRange(0, 1024)
         self.speed_limit.setSuffix(" MiB/s")
@@ -344,7 +388,18 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
-        card, card_vbox = self._section_card("用户认证", "用于登录 B 站账号，提升清晰度权限")
+        card, card_vbox = self._section_card("用户认证", "用于需要登录的站点（会员/私享/高画质门槛）")
+
+        # 首选方式：直接从浏览器读取已登录的 Cookie（无需手动复制粘贴）
+        self.cookie_browser = QComboBox()
+        self.cookie_browser.addItems(jiudown_engine.COOKIE_BROWSERS)
+        row = self._form_row("从浏览器读取 Cookie", self.cookie_browser)
+        row.addStretch()
+        card_vbox.addLayout(row)
+        card_vbox.addWidget(self._make_hint_label(
+            "选择浏览器后，下载时会自动读取该浏览器里已登录站点的 Cookie；"
+            "下方手动填写的 Cookie 仅在未选择浏览器时使用"
+        ))
 
         def token_input(placeholder: str) -> QLineEdit:
             edit = QLineEdit()
@@ -461,9 +516,73 @@ class SettingsPage(QWidget):
         self.raw_access_token.setText(user.get("raw-access-token", ""))
         self.raw_cookies.setPlainText(user.get("raw-cookies", ""))
         self.hide_nickname.setChecked(bool(user.get("hide-nickname", False)))
+        self.playlist_limit.setValue(int(task.get("playlist-limit", 1)))
+
+        # 下载引擎（yt-dlp）：Cookie 来源与代理（代理优先取 engine.proxy）
+        engine_cfg = current.get("engine", {}) or {}
+        browser = engine_cfg.get("cookies-from-browser", "不使用") or "不使用"
+        if self.cookie_browser.findText(browser) < 0:
+            browser = "不使用"
+        self.cookie_browser.setCurrentText(browser)
+        backend = str(engine_cfg.get("backend") or "auto")
+        for i in range(self.engine_backend.count()):
+            if self.engine_backend.itemData(i) == backend:
+                self.engine_backend.setCurrentIndex(i)
+                break
+        if engine_cfg.get("proxy"):
+            self.proxy_addr.setText(str(engine_cfg.get("proxy")))
 
         self._apply_format_gating()
         self._refresh_ffmpeg_status()
+        self._refresh_engine_status()
+
+    # ---------------------------------------------------------------- 下载引擎
+
+    def _refresh_engine_status(self) -> None:
+        """引擎状态行（只读版本元数据，不 import 重模块，保证启动速度）"""
+        label = getattr(self, "engine_status_label", None)
+        if label is None:
+            return
+        info = jiudown_engine.engine.info()
+        native = "原生 B 站 ✓"
+        ytdlp = f"yt-dlp {info['ytdlp_version'] or '未安装'}"
+        label.setText(
+            f"JiuDown 引擎 {info['version']} · {native} · {ytdlp}"
+        )
+        self.engine_update_btn.setEnabled(True)
+        if not info["ytdlp_ready"]:
+            label.setText(
+                f"JiuDown 引擎 {info['version']} · 原生 B 站 ✓ · "
+                "yt-dlp 未安装（B 站以外站点不可用）"
+            )
+
+    def _update_engine(self) -> None:
+        """后台更新 yt-dlp（失败给出可读原因）"""
+        import threading
+
+        self.engine_update_btn.setEnabled(False)
+        self.engine_status_label.setText("正在更新下载引擎，请稍候…")
+        result: dict = {}
+
+        def work() -> None:
+            result["r"] = jiudown_engine.update_engine()
+
+        thread = threading.Thread(target=work, daemon=True, name="ytdlp-update")
+        thread.start()
+
+        def poll() -> None:
+            if thread.is_alive():
+                QTimer.singleShot(250, poll)
+                return
+            ok, message = result.get("r", (False, "未知错误"))
+            self.engine_update_btn.setEnabled(True)
+            self._refresh_engine_status()
+            if ok:
+                QMessageBox.information(self, "更新完成", f"下载引擎已更新到 {message}")
+            else:
+                QMessageBox.warning(self, "更新失败", message)
+
+        QTimer.singleShot(250, poll)
 
     # ---------------------------------------------------------------- FFmpeg
 
@@ -549,6 +668,12 @@ class SettingsPage(QWidget):
                 "disable-mcdn": self.disable_mcdn.isChecked(),
                 "quality": self.default_quality.currentText(),
                 "format": self.default_format.currentText(),
+                "playlist-limit": int(self.playlist_limit.value()),
+            },
+            "engine": {
+                "backend": self.engine_backend.currentData() or "auto",
+                "proxy": self.proxy_addr.text().strip(),
+                "cookies-from-browser": self.cookie_browser.currentText(),
             },
             "jdm": {
                 "max-retry": int(self.max_retry.value()),

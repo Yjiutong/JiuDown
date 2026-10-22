@@ -1,7 +1,7 @@
 """
 JiuDown Desktop - 主程序入口（PySide6 桌面应用）
 
-负责配置初始化、日志配置、asyncio 后台桥启动、核心进程拉起与主窗口展示
+负责配置初始化、日志配置、asyncio 后台桥启动与主窗口展示（下载由 yt-dlp 引擎在进程内完成）
 
 本项目 fork 自开源项目 JiJiDownForDesktop（https://github.com/o5-null/JiJiDownForDesktop），
 在此基础上修改完善：界面重构为 PySide6 原生桌面应用，并新增 asyncio 后台线程桥与模块化页面结构。
@@ -74,7 +74,7 @@ def _migrate_old_appdata_config() -> None:
 
 
 def initialize_config() -> None:
-    """初始化配置与必要的文件夹"""
+    """初始化配置与必要的文件夹（含旧版 AppData 配置迁移）"""
     from config_manager import config_manager
     from system_info import system_info
 
@@ -94,9 +94,77 @@ def initialize_config() -> None:
     config_manager.initialize()
     system_info.initialize()
 
-    # 便携模式：核心硬编码路径重定向到应用目录（junction）
-    from core_manager import core_manager
-    core_manager.ensure_portable_core_dir()
+
+def _bootstrap_after_ui(window) -> None:
+    """窗口已可见后的重活（全部后台线程/非阻塞，避免拖慢首屏）"""
+    import threading
+
+    # 1) runtime 环境自检（会 spawn 一次内嵌 python，且缺失时下载，耗时不固定）
+    def _runtime_check() -> None:
+        try:
+            from runtime_manager import ensure_runtime, get_runtime_status
+            status = get_runtime_status()
+            logger.info(f"runtime 状态: complete={status['complete']}, python={status['python_version']}")
+            if not status["complete"]:
+                logger.info("runtime 环境不完整，开始自动下载...")
+                if not ensure_runtime():
+                    logger.error("runtime 下载失败，应用可能无法正常运行")
+        except Exception as e:
+            logger.error(f"runtime 自检失败: {e}")
+
+    # 2) FFmpeg：能力探测（磁盘缓存命中时瞬时）+ 需要时后台升级
+    def _ffmpeg_init() -> None:
+        try:
+            import ffmpeg_manager
+            ffmpeg_manager.prepare()
+            ffmpeg_manager.start_auto_upgrade()
+        except Exception as e:
+            logger.error(f"FFmpeg 初始化失败: {e}")
+
+    # 3) 引擎后端自检：yt-dlp 随 runtime.zip 一起从 GitHub Release 发布，
+    #    缺失说明运行时是旧版 —— 重新拉取运行时，绝不走 pip / PyPI
+    def _engine_deps() -> None:
+        try:
+            import importlib
+
+            import ytdlp_engine
+
+            if ytdlp_engine.available():
+                logger.info(f"yt-dlp 后端就绪: {ytdlp_engine.version()}")
+                return
+
+            from runtime_manager import ensure_runtime, has_engine_backend
+
+            if has_engine_backend():
+                # 目录在但当前解释器导入不到：多半是刚下载完，重启生效
+                logger.info("运行时已包含 yt-dlp，当前进程未加载，重启应用后生效")
+                return
+
+            logger.warning("运行时缺少下载引擎，开始从 GitHub Release 更新运行时…")
+            if ensure_runtime():
+                importlib.invalidate_caches()
+                if ytdlp_engine.available():
+                    logger.success(f"引擎已就绪: {ytdlp_engine.version()}")
+                else:
+                    logger.info("运行时已更新（含 yt-dlp），重启应用后生效")
+            else:
+                logger.error(
+                    "运行时更新失败：请双击「首次安装.bat」重新拉取，或检查网络/代理"
+                )
+        except Exception as e:
+            logger.error(f"引擎依赖自检失败: {e}")
+
+    # asyncio 后台桥必须先就绪（下载调度依赖它），它本身只是起线程，代价极小
+    from async_bridge import async_bridge, patch_download_manager
+    async_bridge.start()
+    patch_download_manager()
+
+    # 说明：下载链路由 JiuDown 引擎承担（native B 站链路 + yt-dlp 通用后端，均在进程内），
+    # 不再需要拉起旧版 B 站核心进程；此处只做 runtime / FFmpeg / 引擎依赖自检。
+    for fn, name in ((_runtime_check, "runtime-check"),
+                     (_ffmpeg_init, "ffmpeg-init"),
+                     (_engine_deps, "engine-deps")):
+        threading.Thread(target=fn, daemon=True, name=name).start()
 
 
 def main() -> None:
@@ -104,35 +172,10 @@ def main() -> None:
     configure_logger()
     logger.info("应用启动，开始初始化...")
 
-    # runtime 环境自检：缺失则从 GitHub Release 下载
-    from runtime_manager import ensure_runtime, get_runtime_status
-    status = get_runtime_status()
-    logger.info(f"runtime 状态: complete={status['complete']}, python={status['python_version']}")
-    if not status["complete"]:
-        logger.info("runtime 环境不完整，开始自动下载...")
-        ok = ensure_runtime()
-        if not ok:
-            logger.error("runtime 下载失败，应用可能无法正常运行")
-
     initialize_config()
 
-    # FFmpeg 完整版管理：仓库内置精简版；启动同步探测能力（UI 据此禁用
-    # 不可用选项），非完整版则后台下载完整版并校验后原子替换（不阻塞启动）
-    import ffmpeg_manager
-    ffmpeg_manager.prepare()
-    ffmpeg_manager.start_auto_upgrade()
-
-    # 启动 asyncio 后台线程桥，并让 download_manager 的调度运行其上
-    from async_bridge import async_bridge, patch_download_manager
-    async_bridge.start()
-    patch_download_manager()
-
-    # 自动拉起核心进程
-    from config_manager import config_manager
-    from core_manager import core_manager
-    core_manager.start_core(str(config_manager.get_config_file_path()))
-
-    # 创建 Qt 应用与主窗口
+    # 创建 Qt 应用与主窗口（先出窗口，重活延后）
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
     from theme import load_mode, theme_manager
 
@@ -147,20 +190,8 @@ def main() -> None:
     window = MainWindow()
     window.show()
 
-    def _cleanup_on_exit():
-        """退出时清理核心进程与孤儿进程，避免残留"""
-        try:
-            core_manager.stop_core()
-        except Exception as e:
-            logger.error(f"停止核心失败: {e}")
-        try:
-            core_manager.force_kill_all_core_processes(
-                core_manager.get_core_filename()
-            )
-        except Exception as e:
-            logger.error(f"清理核心孤儿进程失败: {e}")
-
-    app.aboutToQuit.connect(_cleanup_on_exit)
+    # 首帧绘制完成后再启动后台初始化（runtime 自检 / FFmpeg）
+    QTimer.singleShot(0, lambda: _bootstrap_after_ui(window))
 
     exit_code = app.exec()
     async_bridge.stop()

@@ -66,16 +66,40 @@ class ConfigManager:
         'default_quality': {
             'path': 'download-task.quality',
             'default': '720P',
-            'validator': lambda x: x in ['360P', '480P', '720P', '1080P'],
-            'normalizer': lambda x: x if x in ['360P', '480P', '720P', '1080P'] else '720P',
-            'description': '默认清晰度'
+            'validator': lambda x: x in ['最高', '360P', '480P', '720P', '1080P', '单声道', '双声道'],
+            'normalizer': lambda x: x if x in ['最高', '360P', '480P', '720P', '1080P'] else '720P',
+            'description': '默认画质'
         },
         'default_format': {
             'path': 'download-task.format',
             'default': 'mp4',
-            'validator': lambda x: x in ['mp4', 'flv'],
-            'normalizer': lambda x: x if x in ['mp4', 'flv'] else 'mp4',
+            'validator': lambda x: x in ['mp4', 'flv', 'mp3', 'wav'],
+            'normalizer': lambda x: x if x in ['mp4', 'flv', 'mp3', 'wav'] else 'mp4',
             'description': '默认格式'
+        },
+        'playlist_limit': {
+            'path': 'download-task.playlist-limit',
+            'default': 1,
+            'validator': lambda x: 1 <= x <= 500,
+            'normalizer': lambda x: max(1, min(500, int(x))),
+            'description': '播放列表/合集最多下载条数（1=只下当前视频）'
+        },
+        'proxy': {
+            'path': 'engine.proxy',
+            'default': '',
+            'description': '下载代理地址（如 http://127.0.0.1:7890）'
+        },
+        'engine_backend': {
+            'path': 'engine.backend',
+            'default': 'auto',
+            'validator': lambda x: x in ('auto', 'native', 'ytdlp'),
+            'normalizer': lambda x: x if x in ('auto', 'native', 'ytdlp') else 'auto',
+            'description': '下载引擎路由：auto=原生优先并自动降级 / native=仅原生 / ytdlp=仅 yt-dlp'
+        },
+        'cookies_from_browser': {
+            'path': 'engine.cookies-from-browser',
+            'default': '不使用',
+            'description': '从浏览器读取 Cookie 的来源（chrome/edge/firefox…）'
         },
         'user_info': {
             'path': 'user-info',
@@ -237,7 +261,14 @@ class ConfigManager:
                 'download-speed-limit': 0,
                 'disable-mcdn': False,
                 'quality': '720P',
-                'format': 'mp4'
+                'format': 'mp4',
+                'playlist-limit': 1
+            },
+            'engine': {
+                # 下载引擎（native B 站链路 + yt-dlp 通用后端）
+                'backend': 'auto',
+                'proxy': '',
+                'cookies-from-browser': '不使用'
             },
             'jdm': {
                 'max-retry': 3,

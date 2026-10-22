@@ -1,34 +1,25 @@
 """
 主页（状态总览）
-显示核心运行状态、核心文件完整性、FFmpeg、系统环境，
-支持核心文件下载/更新与进度展示
+显示下载引擎（yt-dlp）状态、支持站点规模、FFmpeg 能力与系统环境，
+支持一键更新引擎与重新检测。
+
+版式沿用原「状态卡 + 诊断卡 + 操作行」结构，仅把「B 站核心文件」
+替换为站点无关的下载引擎信息——核心 exe 已不再是下载链路的一环。
 """
 
-import html as html_mod
-from pathlib import Path
+import threading
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from loguru import logger
 
-from config_manager import config_manager
-from core_manager import core_manager
-from core_status import get_core_status, update_core_status
-from system_info import system_info
-from async_bridge import async_bridge
 import ffmpeg_manager
-from theme import C
-
-CORE_BASE_URL = "https://jj.紫灵.top/PC/ReWPF/core/"
-
-
-class _HomeBridge(QObject):
-    """跨线程信号桥：core_manager 的异步下载回调发生在 asyncio 后台线程"""
-    progress = Signal(str, dict)     # task_id, task_info
-    finished = Signal(bool, str)     # success, message
+import jiudown_engine
+from config_manager import config_manager
+from system_info import system_info
 
 
 class HomePage(QWidget):
@@ -36,20 +27,19 @@ class HomePage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._bridge = _HomeBridge()
-        self._bridge.progress.connect(self._on_progress)
-        self._bridge.finished.connect(self._on_finished)
-        self._downloading = False
-        self._core_filename = system_info.get_core_filename()
-        self._hash_result = {}
+        self._updating = False
+        self._site_count = 0
+        self._update_thread = None
+        self._update_result: tuple[bool, str] = (False, "")
 
         self._build_ui()
         self._load_initial_state()
 
+        # 引擎状态轮询（FFmpeg 进度 / 站点统计结果 / 引擎更新结果）——
+        # 全部走「后台做事 + 主线程轮询」，不让后台线程碰任何 Qt 对象
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._refresh_core_status)
-        self._timer.timeout.connect(self._refresh_ffmpeg_state)
-        self._timer.start(5000)
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(1000)
 
     # ---------------------------------------------------------------- FFmpeg
 
@@ -63,7 +53,7 @@ class HomePage(QWidget):
         status = state["status"]
         if status == "full":
             self._ffmpeg_value.setText("已就绪")
-            self._ffmpeg_value.setStyleSheet(f"color: {C['green_dark']};")
+            self._set_value_tone(self._ffmpeg_value, "green")
             version = state.get("version") or ""
             self._ffmpeg_sub.setText(
                 f"FFmpeg {version}（完整版，全部格式可用）" if version else "完整版，全部格式可用"
@@ -71,7 +61,7 @@ class HomePage(QWidget):
             self._ffmpeg_download_btn.hide()
         elif status == "lite":
             self._ffmpeg_value.setText("精简版")
-            self._ffmpeg_value.setStyleSheet(f"color: {C['orange_dark']};")
+            self._set_value_tone(self._ffmpeg_value, "orange")
             version = state.get("version") or ""
             self._ffmpeg_sub.setText(
                 f"FFmpeg {version}（精简版）：flv / wav 与单声道不可用，正在后台下载完整版"
@@ -83,21 +73,93 @@ class HomePage(QWidget):
         elif status == "downloading":
             percent = int(state["progress"] * 100)
             self._ffmpeg_value.setText(f"下载中 {percent}%")
-            self._ffmpeg_value.setStyleSheet(f"color: {C['brand']}; font-weight: 600;")
+            self._set_value_tone(self._ffmpeg_value, "brand")
             self._ffmpeg_sub.setText("正在自动拉取完整版 FFmpeg（约 80MB），完成后自动替换")
             self._ffmpeg_download_btn.hide()
         elif status == "failed":
             self._ffmpeg_value.setText("拉取失败")
-            self._ffmpeg_value.setStyleSheet(f"color: {C['red_dark']};")
+            self._set_value_tone(self._ffmpeg_value, "red")
             self._ffmpeg_sub.setText("自动下载失败，可重试，或手动下载后放入 resources 目录")
             self._ffmpeg_download_btn.setText("重试下载")
             self._ffmpeg_download_btn.show()
         else:  # missing
             self._ffmpeg_value.setText("未找到")
-            self._ffmpeg_value.setStyleSheet(f"color: {C['red_dark']};")
+            self._set_value_tone(self._ffmpeg_value, "red")
             self._ffmpeg_sub.setText("首次使用将自动下载完整版，也可手动放入 resources 目录")
             self._ffmpeg_download_btn.setText("下载完整版")
             self._ffmpeg_download_btn.show()
+
+    # ---------------------------------------------------------------- 引擎
+
+    def _refresh_engine_state(self) -> None:
+        """引擎卡片：JiuDown 引擎版本 + 双后端就绪情况"""
+        info = jiudown_engine.engine.info()
+        self._engine_value.setText(f"v{info['version']}")
+        if info["ytdlp_ready"]:
+            self._set_value_tone(self._engine_value, "green")
+            self._engine_sub.setText(
+                f"原生 B 站 + yt-dlp {info['ytdlp_version']}（双后端）"
+            )
+        else:
+            self._set_value_tone(self._engine_value, "orange")
+            self._engine_sub.setText("原生 B 站可用；yt-dlp 未安装，其他站点不可用")
+        self._refresh_diagnostics()
+
+    def _refresh_site_count(self) -> None:
+        """支持站点数：引擎侧后台预热，主线程轮询取值（不阻塞界面）"""
+        count = jiudown_engine.request_site_count()
+        if count is None:
+            if not self._site_count:
+                self._sites_value.setText("统计中…")
+                self._sites_sub.setText("正在读取内置站点提取器…")
+            return
+        self._site_count = int(count or 0)
+        if self._site_count > 0:
+            self._sites_value.setText(f"{self._site_count} 个")
+            self._set_value_tone(self._sites_value, "green")
+            self._sites_sub.setText("yt-dlp 后端内置提取器（B 站另走原生链路）")
+        else:
+            self._sites_value.setText("未知")
+            self._set_value_tone(self._sites_value, "orange")
+            self._sites_sub.setText("未能读取站点列表（引擎可能未就绪）")
+
+    def _refresh_diagnostics(self) -> None:
+        """诊断卡：引擎 / FFmpeg / Cookie / 代理 四条等宽信息"""
+        info = jiudown_engine.engine.info()
+        ok = bool(info["ytdlp_ready"])
+        ytdlp_ver = info["ytdlp_version"] or "未安装"
+        self._engine_line.setText(
+            f"引擎: JiuDown {info['version']}（原生 B 站 + yt-dlp {ytdlp_ver}）"
+        )
+        backend_text = jiudown_engine.BACKEND_LABELS.get(info["mode"], info["mode"])
+        self._backend_line.setText(f"后端路由: {backend_text}")
+
+        state = ffmpeg_manager.get_status()
+        label = {"full": "完整版", "lite": "精简版", "missing": "未找到"}.get(
+            state["status"], state["status"]
+        )
+        self._ffmpeg_line.setText(f"FFmpeg: {label}")
+
+        try:
+            browser = str(config_manager.get_config("cookies_from_browser") or "不使用")
+            proxy = str(config_manager.get_config("proxy") or "").strip()
+        except Exception:
+            browser, proxy = "不使用", ""
+        cookie_text = browser if browser and browser != "不使用" else "未配置（登录站点可能受限）"
+        self._cookie_line.setText(f"Cookie: 浏览器 {cookie_text}" if browser != "不使用" else f"Cookie: {cookie_text}")
+        self._proxy_line.setText(f"代理: {proxy or '未配置'}")
+
+        if ok:
+            self._set_badge("green", "就绪")
+            self._diag_message.setText(
+                "B 站走原生链路、其余站点走 yt-dlp；解析失败时先更新 yt-dlp 后端，"
+                "需要登录的内容请在设置中选择浏览器 Cookie"
+            )
+        else:
+            self._set_badge("orange", "部分就绪")
+            self._diag_message.setText(
+                "原生 B 站链路可用；yt-dlp 后端未安装，B 站以外的站点无法下载，建议修复依赖"
+            )
 
     # ---------------------------------------------------------------- UI
 
@@ -129,6 +191,12 @@ class HomePage(QWidget):
         vbox.addStretch()
         return frame, value_label, sub_label
 
+    def _make_hash_label(self, prefix: str) -> QLabel:
+        """创建等宽字体的信息行（沿用原 Hash 行的视觉效果）"""
+        label = QLabel(f"{prefix}: —")
+        label.setProperty("cssClass", "hashLabel")
+        return label
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -138,9 +206,10 @@ class HomePage(QWidget):
         cards_row = QHBoxLayout()
         cards_row.setSpacing(14)
 
-        self._running_card, self._running_value, _ = self._make_status_card("核心运行")
-        self._file_card, self._file_value, self._file_sub = self._make_status_card("核心文件")
-        self._file_value.setProperty("cssClass", "cardValueSmall")
+        self._engine_card, self._engine_value, self._engine_sub = self._make_status_card("JiuDown 引擎")
+        self._engine_value.setProperty("cssClass", "cardValueSmall")
+        self._sites_card, self._sites_value, self._sites_sub = self._make_status_card("支持站点")
+        self._sites_value.setProperty("cssClass", "cardValueSmall")
         self._ffmpeg_card, self._ffmpeg_value, self._ffmpeg_sub = self._make_status_card("FFmpeg")
         self._ffmpeg_value.setProperty("cssClass", "cardValueSmall")
         self._ffmpeg_btn_row = QHBoxLayout()
@@ -157,93 +226,60 @@ class HomePage(QWidget):
         self._system_card, self._system_value, self._system_sub = self._make_status_card("系统环境")
         self._system_value.setProperty("cssClass", "cardValueSmall")
 
-        for card in (self._running_card, self._file_card, self._ffmpeg_card, self._system_card):
+        for card in (self._engine_card, self._sites_card, self._ffmpeg_card, self._system_card):
             cards_row.addWidget(card, 1)
         layout.addLayout(cards_row)
 
-        # ---- 完整性验证卡片 ----
-        self._hash_card = QFrame()
-        self._hash_card.setProperty("cssClass", "card")
-        hash_vbox = QVBoxLayout(self._hash_card)
-        hash_vbox.setContentsMargins(16, 14, 16, 14)
-        hash_vbox.setSpacing(8)
+        # ---- 引擎诊断卡片 ----
+        self._diag_card = QFrame()
+        self._diag_card.setProperty("cssClass", "card")
+        diag_vbox = QVBoxLayout(self._diag_card)
+        diag_vbox.setContentsMargins(16, 14, 16, 14)
+        diag_vbox.setSpacing(8)
 
-        hash_top = QHBoxLayout()
-        hash_top.setSpacing(8)
-        verify_title = QLabel("完整性验证")
-        verify_title.setProperty("cssClass", "sectionTitle")
+        diag_top = QHBoxLayout()
+        diag_top.setSpacing(8)
+        diag_title = QLabel("引擎诊断")
+        diag_title.setProperty("cssClass", "sectionTitle")
         self._hash_badge = QLabel("检测中")
         self._hash_badge.setProperty("cssClass", "badge")
         self._hash_badge.setProperty("badge", "gray")
-        hash_top.addWidget(verify_title)
-        hash_top.addWidget(self._hash_badge)
-        hash_top.addStretch()
-        hash_vbox.addLayout(hash_top)
+        diag_top.addWidget(diag_title)
+        diag_top.addWidget(self._hash_badge)
+        diag_top.addStretch()
+        diag_vbox.addLayout(diag_top)
 
-        self._official_hash_label = QLabel("官方 Hash: —")
-        self._official_hash_label.setStyleSheet(
-            f"font-family: 'Cascadia Code','Consolas',monospace; font-size: 12px; color: {C['text_secondary']};"
-        )
-        self._local_hash_label = QLabel("本地 Hash: —")
-        self._local_hash_label.setStyleSheet(
-            f"font-family: 'Cascadia Code','Consolas',monospace; font-size: 12px; color: {C['text_secondary']};"
-        )
-        self._hash_message = QLabel("")
-        self._hash_message.setProperty("cssClass", "cardSub")
-        hash_vbox.addWidget(self._official_hash_label)
-        hash_vbox.addWidget(self._local_hash_label)
-        hash_vbox.addWidget(self._hash_message)
-        layout.addWidget(self._hash_card)
+        self._engine_line = self._make_hash_label("引擎")
+        self._backend_line = self._make_hash_label("后端路由")
+        self._ffmpeg_line = self._make_hash_label("FFmpeg")
+        self._cookie_line = self._make_hash_label("Cookie")
+        self._proxy_line = self._make_hash_label("代理")
+        self._diag_message = QLabel("")
+        self._diag_message.setProperty("cssClass", "cardSub")
+        self._diag_message.setWordWrap(True)
+        for widget in (self._engine_line, self._backend_line, self._ffmpeg_line,
+                       self._cookie_line, self._proxy_line, self._diag_message):
+            diag_vbox.addWidget(widget)
+        layout.addWidget(self._diag_card)
 
         # ---- 操作区 ----
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
-        self._action_button = QPushButton("下载核心文件")
+        self._action_button = QPushButton("更新下载引擎")
         self._action_button.setProperty("primary", True)
-        self._action_button.clicked.connect(self._start_core_download)
-        self._refresh_button = QPushButton("检查更新")
+        self._action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._action_button.clicked.connect(self._update_engine)
+        self._refresh_button = QPushButton("重新检测")
         self._refresh_button.clicked.connect(self._reload_state)
         action_row.addWidget(self._action_button)
         action_row.addWidget(self._refresh_button)
         action_row.addStretch()
         layout.addLayout(action_row)
 
-        # ---- 下载进度区（默认隐藏） ----
-        self._progress_card = QFrame()
-        self._progress_card.setProperty("cssClass", "card")
-        self._progress_card.hide()
-        prog_vbox = QVBoxLayout(self._progress_card)
-        prog_vbox.setContentsMargins(16, 14, 16, 14)
-        prog_vbox.setSpacing(8)
-
-        self._progress_title = QLabel("正在下载: ")
-        self._progress_title.setProperty("cssClass", "sectionTitle")
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 1000)
-        self._progress_bar.setValue(0)
-        self._progress_bar.setTextVisible(False)
-        self._progress_status = QLabel("准备下载...")
-        self._progress_status.setProperty("cssClass", "taskDetail")
-        self._progress_speed = QLabel("")
-        self._progress_speed.setStyleSheet(f"color: {C['blue_dark']}; font-size: 12px;")
-        self._progress_eta = QLabel("")
-        self._progress_eta.setStyleSheet(f"color: {C['green_dark']}; font-size: 12px;")
-
-        info_row = QHBoxLayout()
-        info_row.setSpacing(16)
-        info_row.addWidget(self._progress_status)
-        info_row.addWidget(self._progress_speed)
-        info_row.addWidget(self._progress_eta)
-        info_row.addStretch()
-
-        prog_vbox.addWidget(self._progress_title)
-        prog_vbox.addWidget(self._progress_bar)
-        prog_vbox.addLayout(info_row)
-        layout.addWidget(self._progress_card)
-
         # ---- 配置状态 ----
         self._config_label = QLabel("")
         self._config_label.setProperty("cssClass", "cardSub")
+        self._config_label.setWordWrap(True)
         layout.addWidget(self._config_label)
 
         layout.addStretch()
@@ -251,86 +287,35 @@ class HomePage(QWidget):
     # ---------------------------------------------------------------- 状态
 
     def _load_initial_state(self) -> None:
-        """加载页面初始状态（核心文件、FFmpeg、系统、Hash）"""
-        # 系统环境
+        """加载页面初始状态（引擎 / 站点 / FFmpeg / 系统 / 配置）"""
         sys_info = system_info.get_system_info()
         self._system_value.setText(
-            f"{sys_info.get('system', '')} {sys_info.get('architecture', '')} {sys_info.get('processor_type', '')}"
+            f"{sys_info.get('system', '')} {sys_info.get('architecture', '')} "
+            f"{sys_info.get('processor_type', '')}"
         )
         self._system_sub.setText(f"机器类型: {sys_info.get('machine', '—')}")
 
-        # FFmpeg 状态（含自动拉取进度）
         self._refresh_ffmpeg_state()
+        self._refresh_engine_state()
+        self._refresh_site_count()
 
-        # 配置文件状态
         config_file_path = config_manager.get_config_file_path()
         config_exists = config_file_path.exists()
         self._config_exists = config_exists
         if config_exists:
             self._config_label.setText(f"配置文件已存在: {config_file_path}")
-            self._config_label.setStyleSheet(f"color: {C['green_dark']}; font-size: 12px;")
+            self._config_label.setProperty("cssClass", "configOk")
         else:
             self._config_label.setText("配置文件不存在，请在设置中创建配置")
-            self._config_label.setStyleSheet(f"color: {C['red_dark']}; font-size: 12px;")
+            self._config_label.setProperty("cssClass", "configError")
+        self._config_label.style().unpolish(self._config_label)
+        self._config_label.style().polish(self._config_label)
 
-        self._refresh_core_status()
-        self._reload_hash()
-
-    def _reload_hash(self) -> None:
-        """重新检查核心文件 Hash 并刷新显示"""
-        self._hash_result = core_manager.check_core_hash()
-        result = self._hash_result
-
-        if not result.get("exists"):
-            self._file_value.setText(f"{self._core_filename}\n(未找到)")
-            self._file_value.setStyleSheet(f"color: {C['red_dark']};")
-            self._file_tone = "red_dark"
-            self._file_sub.setText("状态: 核心文件不存在")
-            self._set_badge("red", "文件缺失")
-            self._official_hash_label.setText("官方 Hash: —")
-            self._local_hash_label.setText("本地 Hash: —")
-            self._hash_message.setText("核心文件未找到，请下载对应版本的核心文件")
-            self._action_button.setText("下载核心文件")
-            self._action_button.setEnabled(True)
-        elif result.get("valid"):
-            self._file_value.setText(f"{self._core_filename}\n(已找到)")
-            self._file_value.setStyleSheet(f"color: {C['green_dark']};")
-            self._file_tone = "green_dark"
-            self._file_sub.setText("状态: Hash 校验通过，文件完整")
-            self._set_badge("green", "验证通过")
-            self._official_hash_label.setText(f"官方 Hash: {result.get('official_hash', '—')}")
-            self._local_hash_label.setText(f"本地 Hash: {result.get('local_hash', '—')}")
-            self._hash_message.setText("文件完整性验证通过")
-            self._action_button.setText("更新核心文件")
-            self._action_button.setEnabled(True)
-        else:
-            self._file_value.setText(f"{self._core_filename}\n(已找到)")
-            self._file_value.setStyleSheet(f"color: {C['orange_dark']};")
-            self._file_tone = "orange_dark"
-            self._file_sub.setText(f"状态: {result.get('message', 'Hash 校验失败')}")
-            self._set_badge("orange", "需要更新")
-            self._official_hash_label.setText(f"官方 Hash: {result.get('official_hash', '无法获取')}")
-            self._local_hash_label.setText(f"本地 Hash: {result.get('local_hash', '无法计算')}")
-            self._hash_message.setText("文件完整性验证失败，建议更新核心文件")
-            self._action_button.setText("更新核心文件")
-            self._action_button.setEnabled(True)
-
-    def _refresh_core_status(self) -> None:
-        """定时刷新核心运行状态（每 5 秒）"""
-        update_core_status()
-        status = get_core_status()
-        running = status.get("is_running", False)
-        if running:
-            self._running_value.setText("正在运行")
-            self._running_value.setStyleSheet(f"color: {C['green_dark']};")
-        else:
-            self._running_value.setText("已停止")
-            self._running_value.setStyleSheet(f"color: {C['red_dark']};")
-
-    def _reload_state(self) -> None:
-        """点击"检查更新"时刷新全部状态"""
-        update_core_status()
-        self._reload_hash()
+    def _set_value_tone(self, label: QLabel, tone: str) -> None:
+        """设置数值标签的色调（green/orange/red），通过 cssClass 跟随主题"""
+        label.setProperty("tone", tone)
+        label.style().unpolish(label)
+        label.style().polish(label)
 
     def _set_badge(self, tone: str, text: str) -> None:
         self._hash_badge.setProperty("badge", tone)
@@ -339,102 +324,68 @@ class HomePage(QWidget):
         self._hash_badge.style().unpolish(self._hash_badge)
         self._hash_badge.style().polish(self._hash_badge)
 
-    def refresh_theme(self) -> None:
-        """主题切换回调：重放本页内联动态颜色"""
-        hash_label_style = (
-            f"font-family: 'Cascadia Code','Consolas',monospace;"
-            f" font-size: 12px; color: {C['text_secondary']};"
-        )
-        self._official_hash_label.setStyleSheet(hash_label_style)
-        self._local_hash_label.setStyleSheet(hash_label_style)
-        self._config_label.setStyleSheet(
-            f"color: {C['green_dark'] if self._config_exists else C['red_dark']};"
-            f" font-size: 12px;"
-        )
-        file_tone = getattr(self, "_file_tone", None)
-        if file_tone:
-            self._file_value.setStyleSheet(f"color: {C[file_tone]};")
-        self._progress_speed.setStyleSheet(f"color: {C['blue_dark']}; font-size: 12px;")
-        self._progress_eta.setStyleSheet(f"color: {C['green_dark']}; font-size: 12px;")
-        # 状态类颜色统一从当前主题重新取色
-        self._refresh_ffmpeg_state()
-        self._refresh_core_status()
+    def _reload_state(self) -> None:
+        """点击「重新检测」：刷新全部状态"""
+        self._refresh_engine_state()
+        self._refresh_site_count()
+        self._load_initial_state()
 
-    # ---------------------------------------------------------------- 下载
+    # ---------------------------------------------------------------- 轮询
 
-    def _start_core_download(self) -> None:
-        if self._downloading:
+    def _poll(self) -> None:
+        """主线程轮询：站点统计预热结果 / 引擎更新完成 / FFmpeg 进度（每 5 秒）"""
+        self._tick = getattr(self, "_tick", 0) + 1
+        if self._site_count <= 0:
+            self._refresh_site_count()
+        if self._tick % 5 == 0:
+            self._refresh_ffmpeg_state()
+            self._refresh_diagnostics()
+        thread = self._update_thread
+        if self._updating and thread is not None and not thread.is_alive():
+            self._updating = False
+            self._update_thread = None
+            self._on_engine_updated(*self._update_result)
+
+    # ---------------------------------------------------------------- 引擎更新
+
+    def _update_engine(self) -> None:
+        """后台更新 yt-dlp；结果由 _poll 在主线程应用（不跨线程发信号）"""
+        if self._updating:
             return
-        self._downloading = True
+        self._updating = True
+        self._update_result = (False, "")
         self._action_button.setEnabled(False)
         self._refresh_button.setEnabled(False)
+        self._engine_value.setText("更新中…")
+        self._set_value_tone(self._engine_value, "brand")
+        self._engine_sub.setText("正在通过 pip 更新下载引擎，请稍候…")
 
-        self._progress_card.show()
-        self._progress_title.setText(f"正在下载: {self._core_filename}")
-        self._progress_bar.setValue(0)
-        self._progress_status.setText("准备下载...")
-        self._progress_speed.setText("")
-        self._progress_eta.setText("")
+        def worker() -> None:
+            try:
+                self._update_result = jiudown_engine.update_engine()
+            except Exception as e:
+                self._update_result = (False, str(e))
 
-        # 官网下载源使用官方核心文件名，本地保存使用 JiuDown 品牌名
-        download_url = CORE_BASE_URL + system_info.get_official_core_filename()
-        save_path = str(system_info.get_default_paths()["resources_dir"])
-        logger.info(f"开始下载核心文件: {download_url} -> {save_path}")
+        self._update_thread = threading.Thread(
+            target=worker, daemon=True, name="ytdlp-update"
+        )
+        self._update_thread.start()
 
-        try:
-            future = async_bridge.submit(core_manager.download_file(
-                url=download_url,
-                filename=self._core_filename,
-                save_path=save_path,
-                progress_callback=self._bridge.progress.emit,
-            ))
-            future.add_done_callback(self._on_download_done)
-        except Exception as e:
-            logger.error(f"提交下载任务失败: {e}")
-            self._on_finished(False, str(e))
-
-    def _on_download_done(self, future) -> None:
-        """asyncio 后台线程回调 -> 通过信号切回 UI 线程"""
-        try:
-            result = future.result()
-            success = bool(result.get("success"))
-            message = result.get("message") or ("下载完成" if success else "下载失败")
-        except Exception as e:
-            success, message = False, str(e)
-        self._bridge.finished.emit(success, message)
-
-    def _on_progress(self, task_id: str, task_info: dict) -> None:
-        progress = task_info.get("progress", 0)
-        self._progress_bar.setValue(int(progress * 10))
-
-        status = task_info.get("status", "unknown")
-        downloaded = task_info.get("downloaded_size", 0)
-        total = task_info.get("total_size", 0)
-        speed = task_info.get("speed", 0)
-        eta = task_info.get("eta", 0)
-
-        if status == "downloading":
-            text = f"进度: {progress:.1f}% ({core_manager.format_file_size(downloaded)} / {core_manager.format_file_size(total)})"
-            self._progress_status.setText(text)
-            if speed > 0:
-                self._progress_speed.setText(f"速度: {core_manager.format_speed(speed)}")
-            if eta > 0:
-                self._progress_eta.setText(f"预计剩余: {core_manager.format_time(eta)}")
-        elif status == "completed":
-            self._progress_status.setText(f"下载完成: {core_manager.format_file_size(total)}")
-            self._progress_speed.setText("")
-            self._progress_eta.setText("")
-
-    def _on_finished(self, success: bool, message: str) -> None:
-        self._downloading = False
+    def _on_engine_updated(self, ok: bool, message: str) -> None:
         self._action_button.setEnabled(True)
         self._refresh_button.setEnabled(True)
-        if success:
-            self._progress_bar.setValue(1000)
-            self._progress_status.setText("✅ 下载完成！")
-            self._progress_speed.setText("")
-            self._progress_eta.setText("")
-            QTimer.singleShot(1500, self._reload_state)
-        else:
-            self._progress_status.setText(f"❌ 下载失败: {message}")
-            self._progress_status.setStyleSheet(f"color: {C['red_dark']}; font-size: 12px;")
+        logger.info(f"下载引擎更新{'成功' if ok else '失败'}: {message}")
+        self._refresh_engine_state()
+        if not ok:
+            self._engine_sub.setText(f"更新失败：{message}")
+
+    def refresh_theme(self) -> None:
+        """主题切换回调：QSS cssClass 自动跟随，此处仅需刷新状态"""
+        self._refresh_ffmpeg_state()
+        self._refresh_engine_state()
+        if hasattr(self, "_config_exists"):
+            self._config_label.setProperty(
+                "cssClass", "configOk" if self._config_exists else "configError"
+            )
+            self._config_label.style().unpolish(self._config_label)
+            self._config_label.style().polish(self._config_label)

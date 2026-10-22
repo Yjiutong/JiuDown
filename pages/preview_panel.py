@@ -1,10 +1,9 @@
 """
 视频预览面板（卡片下方展开版）
-只加载播放窗口：在线预览直接播放流（本地代理 + 音视频合一 durl），
+只加载播放窗口：在线预览经 yt-dlp 解析出可直接播放的直链后由本地代理转发，
 不加载任何网页内容；加载过程中显示占位，就绪后才展示播放器。
 """
 
-import re
 import threading
 import http.server
 import socketserver
@@ -20,26 +19,15 @@ from PySide6.QtWidgets import (
 import requests
 from loguru import logger
 
-from download_manager import download_manager
+import jiudown_engine
 from config_manager import config_manager
 
 
-def _extract_bvid(url: str) -> str:
-    """从链接中提取 BV 号"""
-    url = url.strip()
-    match = re.search(r"(BV[0-9A-Za-z]{10})", url)
-    if match:
-        return match.group(1)
-    match = re.search(r"(av\d+)", url, re.IGNORECASE)
-    if match:
-        return match.group(1).lower()
-    raise ValueError("无法从链接中识别B站视频ID")
-
-
 # ---------------------------------------------------------------- 本地流代理
-# 在线预览原理（对齐 PeanutDL 的即时播放）：
-# 解析出 B 站音视频合一的 durl 流地址后，由本地代理携带 Referer 请求头转发，
-# Qt 播放器播放 http://127.0.0.1:<port>/stream 实现实时播放（无需等待整段缓冲）。
+# 在线预览原理：
+# yt-dlp 解析出站点直链 + 该站点要求的请求头（Referer/UA/Cookie 等），
+# 由本地代理统一带上这些头转发，Qt 播放器只播 http://127.0.0.1:<port>/stream，
+# 实现即时起播（无需整段下载），也绕开了 QMediaPlayer 无法自定义请求头的问题。
 
 _PROXY_STREAM_URL = ""
 _PROXY_STREAM_HEADERS = {}
@@ -91,12 +79,12 @@ class _PreviewVideoWidget(QVideoWidget):
 
 
 class _StreamProxyHandler(http.server.BaseHTTPRequestHandler):
-    """本地流代理：把 B 站流（带鉴权头）转发给播放器，支持 Range 透传"""
+    """本地流代理：把站点直链（带站点要求的请求头）转发给播放器，支持 Range 透传"""
 
     def do_GET(self):
         try:
             req_h = dict(self.headers)
-            # 过滤 hop-by-hop 头：播放器的 Host 指向本地代理，透传会给 B 站造成 403
+            # 过滤 hop-by-hop 头：播放器的 Host 指向本地代理，透传会让站点判定为异常请求
             for k in ("Host", "Connection", "Accept-Encoding", "Proxy-Connection"):
                 req_h.pop(k, None)
             req_h.update(_PROXY_STREAM_HEADERS)
@@ -137,8 +125,8 @@ QSlider::groove:horizontal {{ height: 6px; background: {C['media_groove']}; bord
 QSlider::sub-page:horizontal {{ background: {C['brand']}; border-radius: 3px; }}
 QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -4px 0;
     background: #ffffff; border: 2px solid {C['brand']}; border-radius: 7px; }}
-QSlider::handle:horizontal:hover {{ background: #e6f7f6; }}
-QSlider::handle:horizontal:pressed {{ background: #ccfbf1; }}
+QSlider::handle:horizontal:hover {{ background: #F2F2F7; }}
+QSlider::handle:horizontal:pressed {{ background: #D1D1D6; }}
 """
 
 
@@ -233,7 +221,7 @@ class PreviewPanel(QWidget):
         online_lay.setContentsMargins(0, 0, 0, 0)
         online_lay.setSpacing(8)
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("B站链接，回车在线预览")
+        self.url_input.setPlaceholderText("粘贴视频链接，回车在线预览")
         self.url_input.returnPressed.connect(self._load_online)
         self.load_btn = QPushButton("加载")
         self.load_btn.setProperty("small", True)
@@ -287,7 +275,7 @@ class PreviewPanel(QWidget):
         # 播放控制条：深色半透明底 + 圆角主色进度条 + 圆润播放按钮 + 等宽时间
         control_bar = QFrame()
         control_bar.setStyleSheet(
-            "QFrame { background: rgba(31, 41, 55, 0.88); border-radius: 12px; }"
+            "QFrame { background: rgba(28, 28, 30, 0.92); border-radius: 10px; }"
         )
         control_row = QHBoxLayout(control_bar)
         control_row.setContentsMargins(12, 8, 12, 8)
@@ -395,44 +383,31 @@ class PreviewPanel(QWidget):
         text = self.url_input.text().strip()
         if not text:
             return
-        try:
-            bvid = _extract_bvid(text)
-        except ValueError as e:
-            self.url_input.setText("")
-            self.url_input.setPlaceholderText(str(e))
+        url = jiudown_engine.normalize_url(text)
+        if not url:
+            self.url_input.setPlaceholderText("请粘贴以 http(s):// 开头的视频链接")
             return
-        logger.info(f"在线预览加载: {bvid}")
+        if url != text:
+            self.url_input.setText(url)
+        logger.info(f"在线预览加载: {url}")
         self.online_btn.setChecked(True)
         self.local_btn.setChecked(False)
         self._mode = 0
-        self._show_loading(f"正在加载 {bvid} 的在线视频源…")
-        thread = threading.Thread(target=self._online_worker, args=(bvid,), daemon=True)
+        self._show_loading("正在解析在线视频源…")
+        thread = threading.Thread(target=self._online_worker, args=(url,), daemon=True)
         thread.start()
 
-    def _online_worker(self, bvid: str) -> None:
-        """工作线程：解析音视频合一的 durl 流地址并交给本地代理播放"""
+    def _online_worker(self, url: str) -> None:
+        """工作线程：yt-dlp 解析「音视频合一」的直链，交给本地代理播放"""
         try:
-            info = download_manager._video_info(bvid)
-            cid = info.get("cid")
-            if not cid:
-                raise RuntimeError("未获取到视频 cid")
-            api = (
-                f"{download_manager.BASE_API}/x/player/playurl"
-                f"?bvid={bvid}&cid={cid}&qn=32&fnval=0"
-            )
-            resp = requests.get(api, headers=download_manager._headers(bvid), timeout=20)
-            resp.raise_for_status()
-            payload = resp.json()
-            if payload.get("code") != 0:
-                raise RuntimeError(f"播放地址获取失败: {payload.get('message', '未知错误')}")
-            durl = (payload.get("data") or {}).get("durl") or []
-            if not durl:
-                raise RuntimeError("该视频暂无在线预览流（可等待下载完成后本地预览）")
-            stream_url = durl[0]["url"]
+            info = jiudown_engine.resolve_stream(url, prefer="worst")
+            stream_url = info.get("url") or ""
+            if not stream_url:
+                raise RuntimeError("该站点未提供可直接播放的流")
 
             global _PROXY_STREAM_URL, _PROXY_STREAM_HEADERS
             _PROXY_STREAM_URL = stream_url
-            _PROXY_STREAM_HEADERS = download_manager._headers(bvid)
+            _PROXY_STREAM_HEADERS = info.get("headers") or {}
 
             self.online_ready.emit()
         except Exception as e:

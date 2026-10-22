@@ -1,8 +1,8 @@
 """
 asyncio 后台线程桥
 
-让基于 asyncio 的后端逻辑（download_manager 的任务调度、core_manager 的异步下载）
-运行在一个独立的后台事件循环线程中，与 Qt 主线程事件循环共存。
+让基于 asyncio 的后端逻辑（download_manager 的任务调度）运行在独立的后台事件循环线程中，
+与 Qt 主线程事件循环共存。
 
 用法：
     from async_bridge import async_bridge, patch_download_manager

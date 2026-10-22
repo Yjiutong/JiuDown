@@ -16,6 +16,8 @@ class CoreLogManager:
         self.log_file_path = Path(log_file_path)
         self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
         self.max_log_lines = 1000  # 最大保存日志行数
+        self._truncate_bytes = 512 * 1024  # 超过该体积才做截断检查（节流）
+        self._save_count = 0
         
     def archive_logs(self) -> bool:
         """归档当前日志文件，将core_log.txt重命名为带时间戳的文件"""
@@ -96,8 +98,15 @@ class CoreLogManager:
             with open(self.log_file_path, 'a', encoding='utf-8') as f:
                 f.write(formatted_line)
             
-            # 检查日志文件大小，如果超过限制则截断
-            self._truncate_log_file()
+            # 截断检查节流：整文件读+重写约 5ms/次，逐行触发会拖慢日志刷新
+            # （核心日志密集时 1000 行 ≈ 5s）；仅大文件或每 200 行检查一次
+            self._save_count += 1
+            try:
+                oversize = self.log_file_path.stat().st_size > self._truncate_bytes
+            except OSError:
+                oversize = False
+            if oversize or self._save_count % 200 == 0:
+                self._truncate_log_file()
             return True
             
         except Exception as e:
@@ -110,7 +119,9 @@ class CoreLogManager:
             if not self.log_file_path.exists():
                 return []
             
-            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+            # errors="replace"：核心可能写入非 UTF-8（GBK）字节，
+            # 严格解码会整文件读取失败——替换为占位符保证日志可读
+            with open(self.log_file_path, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.readlines()
             
             # 返回最后max_log_lines行日志
@@ -137,7 +148,7 @@ class CoreLogManager:
             if not self.log_file_path.exists():
                 return
             
-            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+            with open(self.log_file_path, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.readlines()
             
             if len(lines) > self.max_log_lines:

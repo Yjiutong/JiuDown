@@ -17,7 +17,6 @@ runtime 目录结构：
 
 import hashlib
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -44,6 +43,9 @@ REQUIRED_FILES = [
     "ffmpeg.exe",
 ]
 
+# 引擎后端随 runtime.zip 一起发布（不再从 PyPI 安装），缺它视为运行时过期
+ENGINE_PACKAGE_DIR = "python/Lib/site-packages/yt_dlp"
+
 
 def get_base_dir() -> Path:
     """获取应用根目录（打包后为 exe 所在目录，开发模式为脚本所在目录）"""
@@ -67,22 +69,22 @@ def get_ffmpeg_path() -> Path:
     return get_runtime_dir() / "ffmpeg.exe"
 
 
-def get_core_path() -> Path:
-    """runtime 中的核心进程路径"""
-    core_name = "JiuDownCore-win64.exe"
-    if platform.system() != "Windows":
-        machine = platform.machine().lower()
-        is_arm = "arm" in machine or "aarch64" in machine
-        is_64 = sys.maxsize > 2**32
-        if platform.system() == "Darwin":
-            core_name = "JiuDownCore-darwin-arm64" if is_arm else "JiuDownCore-darwin-amd64"
-        else:
-            core_name = "JiuDownCore-linux-arm64" if is_arm else "JiuDownCore-linux-amd64"
-    return get_runtime_dir() / core_name
+def has_engine_backend() -> bool:
+    """runtime 里是否带有 yt-dlp 后端
+
+    引擎依赖统一由 release 上的 runtime.zip 提供（不走 PyPI），
+    因此"运行时完整"必须包含引擎目录，否则视为旧版运行时、需要重新拉取。
+    """
+    return (get_runtime_dir() / ENGINE_PACKAGE_DIR).is_dir()
 
 
-def is_runtime_complete() -> bool:
-    """检查 runtime 目录是否完整可用"""
+def is_runtime_complete(check_engine: bool = True) -> bool:
+    """检查 runtime 目录是否完整可用
+
+    Args:
+        check_engine: 是否同时要求 yt-dlp 后端存在（旧版运行时没有该目录，
+            返回 False 会触发重新下载含引擎的新运行时）
+    """
     runtime_dir = get_runtime_dir()
     if not runtime_dir.exists():
         return False
@@ -90,6 +92,9 @@ def is_runtime_complete() -> bool:
         if not (runtime_dir / rel).exists():
             logger.warning(f"runtime 缺失: {rel}")
             return False
+    if check_engine and not has_engine_backend():
+        logger.warning("runtime 缺少下载引擎（yt-dlp），需要从 Release 更新运行时")
+        return False
     # 验证 python 可执行
     python_exe = get_python_exe()
     try:
@@ -206,7 +211,6 @@ def get_runtime_status() -> dict:
     runtime_dir = get_runtime_dir()
     python_exe = get_python_exe()
     ffmpeg = get_ffmpeg_path()
-    core = get_core_path()
 
     status = {
         "runtime_dir": str(runtime_dir),
@@ -215,8 +219,7 @@ def get_runtime_status() -> dict:
         "python_version": "",
         "ffmpeg_exists": ffmpeg.exists(),
         "ffmpeg_size": ffmpeg.stat().st_size if ffmpeg.exists() else 0,
-        "core_exists": core.exists(),
-        "core_name": core.name,
+        "engine_exists": has_engine_backend(),
         "complete": is_runtime_complete(),
     }
 

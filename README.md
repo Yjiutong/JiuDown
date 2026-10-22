@@ -1,10 +1,10 @@
 # JiuDown（玖号下载器）
 
-JiuDown 桌面版（玖号下载器） - 基于Python的现代化B站视频下载工具
+JiuDown 桌面版（玖号下载器） - 自研双引擎（原生 B 站 + yt-dlp）的全站视频下载工具
 
 ## 项目简介
 
-JiuDown（玖号下载器）是一个基于 Python 开发的 B 站视频下载桌面应用，采用 PySide6（Qt）构建原生桌面界面，支持多平台运行，提供直观的操作体验。
+JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下载桌面应用，使用自研的 **JiuDown 引擎**（双后端架构）：B 站走原生链路（接口直连 + DASH 分片 + FFmpeg 合并，由本项目自己维护），其余 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 支持的 1700+ 站点（YouTube、抖音、Vimeo、X 等）由通用后端处理，任一后端失败会自动降级到另一个。界面采用 PySide6（Qt）构建，提供与 Apple HIG 一致的原生桌面体验。
 
 本项目 **fork 自开源项目 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（唧唧下载器桌面版）**，并在此基础上修改完善，包括界面重构、架构升级与功能增强。
 
@@ -12,7 +12,7 @@ JiuDown（玖号下载器）是一个基于 Python 开发的 B 站视频下载�
 
 本项目 fork 自 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（原项目：JiJiDown Desktop，唧唧下载器桌面版，作者 o5-null），并在其基础上修改完善：
 
-- **核心组件**：沿用上游的 [JiJiDownCore](https://jj.紫灵.top/PC/ReWPF/core/) 作为 B 站视频下载核心（本地以 JiuDownCore-* 命名保存）
+- **下载引擎**：自研 **JiuDown 引擎**（`jiudown_engine.py`）——B 站走原生链路（原核心逻辑重写为进程内 Python 实现，清晰度映射/风控 Cookie/分片下载全部自己维护），其他站点走 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 通用后端，双后端自动降级
 - **界面重构**：由原始 NiceGUI Web 界面重构为 PySide6 (Qt) 原生桌面应用
 - **架构升级**：新增 asyncio 后台线程桥、模块化页面结构、QSS 统一设计规范
 - **功能完善**：多任务并发调度、断点续传、批量下载、状态监控、日志管理等
@@ -22,23 +22,27 @@ JiuDown（玖号下载器）是一个基于 Python 开发的 B 站视频下载�
 ## 功能特性
 
 ### 核心功能
-- 🎯 **智能核心管理**：自动检测系统架构，下载对应版本的核心文件
-- 🔒 **文件完整性验证**：通过SHA256哈希校验确保核心文件完整
+- 🌐 **双引擎全站支持**：B 站走自研原生链路（解析快、字段可控），YouTube/抖音/Vimeo/X 等 1700+ 站点走 yt-dlp 通用后端
+- 🔀 **自动降级**：B 站原生链路失败时自动切到 yt-dlp，反之亦然，单站点故障不影响整体可用性
+- 🎚️ **画质与格式**：最高 / 1080P / 720P / 480P / 360P 五档，mp4 / flv / mp3 / wav 四种输出
+- 🍪 **登录内容**：可直接读取 Chrome / Edge / Firefox 等浏览器的 Cookie，下载会员/私享内容
+- 📝 **可读错误**：站点风控、需登录、链接不支持等情况翻译成一句中文提示，不抛原始堆栈
+- 🔄 **引擎可更新**：站点改版导致解析失败时，一键更新 yt-dlp 即可恢复
 - 📱 **跨平台支持**：支持Windows、macOS、Linux系统
 - 🖥️ **原生桌面界面**：基于PySide6 (Qt) 的现代桌面应用界面
-- ⚡ **异步下载**：支持大文件分块下载，实时显示下载进度
 
 ### 下载管理
-- 🎬 **多任务下载**：支持同时下载多个视频任务
+- 🎬 **多任务下载**：可配置并发数，多任务并行下载
+- 📚 **播放列表**：可设置合集/播放列表最多下载条数（默认只下当前视频）
 - 🚀 **智能限速**：可配置下载速度限制，避免网络拥堵
-- 📊 **实时进度**：显示下载速度、剩余时间等详细信息
-- 🔄 **断点续传**：支持下载中断后继续下载
+- 📊 **实时进度**：显示当前文件进度、综合进度、速度与体积
+- 🔄 **分片重试**：yt-dlp 分片级重试 + 任务级重试，网络抖动不丢进度
 
 ### 系统特性
-- 🔧 **灵活配置**：支持自定义下载目录、临时目录等配置
-- 📝 **详细日志**：使用Loguru记录详细的运行日志
-- 🛡️ **安全验证**：自动验证核心文件完整性，防止恶意篡改
-- 🔄 **自动更新**：支持核心文件的自动检测和更新
+- 🔧 **灵活配置**：下载目录、临时目录、代理、Cookie 来源、限速、并发均可配置
+- 📝 **详细日志**：运行日志与下载记录双面板，彩色分级、可打开日志目录
+- 🎬 **在线预览**：悬停标签播放低清流，任务卡内嵌播放器可看在线/本地
+- 🔄 **自动更新**：FFmpeg 完整版自动拉取，yt-dlp 引擎一键升级
 
 ## 系统要求
 
@@ -59,50 +63,75 @@ JiuDown（玖号下载器）是一个基于 Python 开发的 B 站视频下载�
 ## 安装指南
 
 ### 1. 克隆项目
+
 ```bash
 git clone https://github.com/Yjiutong/JiuDown.git
 cd JiuDown
 ```
 
-### 2. 安装依赖
+仓库不含任何二进制依赖（运行时 / FFmpeg 均不入库），克隆下来只有约 40 个源码文件；
+缺失的部分会在首次运行时自动拉取。克隆到任意目录都可以，**没有硬编码路径**。
+
+### 2. 选择一种启动方式
+
+**方式 A：普通用户（无需安装 Python，推荐）**
+
+1. 双击 `首次安装.bat` —— 从 GitHub Release 拉取离线运行时
+   （`runtime\python`，约 320MB，含 PySide6 / yt-dlp / FFmpeg）
+2. 双击 `启动.vbs` —— 静默启动，全程无控制台窗口
+
+**方式 B：开发者（本机已有 Python 3.9+）**
+
 ```bash
 pip install -r requirements.txt
-```
-
-### 3. 运行应用
-```bash
 python app.py
 ```
 
-启动后直接显示桌面应用主窗口。
+### 3. 首次运行会自动完成的事
+
+| 缺失项 | 自动处理 | 来源 |
+|---|---|---|
+| `runtime/`（含 Python / yt-dlp / FFmpeg） | 下载 `runtime.zip` 并解压 | GitHub Release `runtime` 标签 |
+| 运行时里的 `yt-dlp` 后端 | 随 `runtime.zip` 一起下发，**不走 PyPI** | 同上 |
+| `resources/ffmpeg.exe` | 下载完整版 FFmpeg 并替换 | BtbN FFmpeg-Builds |
+| `config/`、`Download/`、`logs/` | 启动时按程序所在目录自动创建 | 本地 |
+
+> 依赖来源只有两处：本仓库 Release 上的 `runtime.zip`，以及 FFmpeg 的公开构建源。
+> 若检测到运行时里没有下载引擎（旧版运行时），会自动按 Release 重新拉取，
+> **不会**擅自从 PyPI 安装。设置页的「更新引擎」是显式的增量升级操作（`pip install -U yt-dlp`），
+> 需要离线可控时可改为重新运行 `首次安装.bat`。
+
+所有路径都相对程序所在目录解析，移动或改名项目文件夹不会影响使用。
 
 ## 项目结构
 
 ```
-JiuDown/
-├── app.py                 # 主程序入口（PySide6）
-├── main_window.py         # 主窗口（侧边导航 + 页面栈）
-├── theme.py               # QSS 主题与配色常量
-├── async_bridge.py        # asyncio 后台线程桥
-├── pages/                 # 页面模块
-│   ├── home_page.py       # 状态总览页
-│   ├── download_page.py   # 视频下载页
-│   ├── log_page.py        # 运行日志页
-│   └── settings_page.py   # 设置页
-├── legacy_nicegui/        # 旧版 NiceGUI Web 界面（存档）
-├── config_manager.py      # 配置管理模块
-├── core_manager.py        # 核心文件管理模块
-├── download_manager.py    # 视频下载管理模块
-├── log_manager.py         # 日志持久化模块
-├── core_status.py         # 核心状态缓存模块
-├── system_info.py         # 系统信息工具模块
-├── requirements.txt       # Python依赖包列表
-├── config/                # 配置文件目录
-├── Download/              # 下载文件目录
-├── TEMP/                  # 临时文件目录
-├── logs/                  # 日志文件目录
-├── resources/             # 核心文件目录
-└── downloads/             # 下载缓存目录
+JiuDown/                       （仓库只含源码，二进制依赖首跑自动拉取）
+├── app.py                     # 主程序入口（配置初始化 + 窗口 + 后台自检）
+├── main_window.py             # 主窗口（侧边导航 + 页面栈 + 托盘）
+├── theme.py                   # 主题令牌与 QSS（Apple HIG，双主题）
+├── async_bridge.py            # asyncio 后台线程桥（下载调度）
+├── jiudown_engine.py          # JiuDown 引擎：双后端路由 + 原生 B 站链路
+├── ytdlp_engine.py            # yt-dlp 通用后端（解析 / 下载 / 预览直链）
+├── download_manager.py        # 下载任务队列与并发调度
+├── ffmpeg_manager.py          # FFmpeg 探测 / 下载 / 能力缓存
+├── runtime_manager.py         # 离线运行时自举（runtime.zip）
+├── config_manager.py          # 配置管理（CONFIG_SCHEMA 统一读写）
+├── log_manager.py             # 日志持久化
+├── system_info.py             # 系统信息与默认路径
+├── pages/
+│   ├── home_page.py           # 状态总览（引擎 / 站点 / FFmpeg / 系统）
+│   ├── download_page.py       # 下载页（标签卡 + 任务卡 + 右键参数）
+│   ├── preview_panel.py       # 内嵌预览播放器（本地流代理）
+│   ├── hover_preview.py       # 悬停低清小窗
+│   ├── log_page.py            # 运行日志 + 下载记录
+│   └── settings_page.py       # 设置页（基本/下载/网络/用户/高级）
+├── 启动.vbs                   # 无控制台启动器（自动探测解释器）
+├── 首次安装.bat               # 首次安装：拉取离线运行时
+├── JiuDownDesktop.spec        # PyInstaller 打包配置（相对路径）
+├── requirements.txt
+├── resources/app.ico          # 唯一入库的二进制资源（图标）
+└── config/ Download/ TEMP/ logs/ runtime/   # 运行时生成，已 gitignore
 ```
 
 ## 核心模块说明
@@ -117,7 +146,7 @@ JiuDown/
 
 ### pages/
 页面模块，每个页面一个文件：
-- `home_page.py`：状态总览（核心运行、文件完整性、FFmpeg、系统环境）
+- `home_page.py`：状态总览（下载引擎、支持站点、FFmpeg、系统环境 + 引擎诊断）
 - `download_page.py`：B站视频批量下载与任务管理
 - `log_page.py`：核心运行日志与下载记录
 - `settings_page.py`：应用配置与参数设置
@@ -135,12 +164,10 @@ asyncio 后台线程桥，让基于 asyncio 的下载调度与 Qt 事件循环�
 - 配置缓存机制
 - 支持YAML配置文件
 
-### core_manager.py
-核心文件管理模块，功能包括：
-- 核心文件下载
-- SHA256哈希验证
-- 下载进度管理
-- 文件完整性检查
+### jiudown_engine.py / ytdlp_engine.py
+下载引擎层。`jiudown_engine` 是统一门面（双后端路由 + 原生 B 站链路），
+`ytdlp_engine` 是通用后端（1700+ 站点）与各类共享工具（URL 规范化、画质→格式映射、
+FFmpeg 转码、错误中文化）。
 
 ### system_info.py
 系统信息工具模块，提供：
@@ -149,21 +176,25 @@ asyncio 后台线程桥，让基于 asyncio 的下载调度与 Qt 事件循环�
 - 路径管理
 - 缓存机制
 
-### legacy_nicegui/
-旧版 NiceGUI Web 界面存档（router.py、ui_*.py 等），仅供历史参考，不再参与构建。
+### ffmpeg_manager.py / runtime_manager.py
+外部依赖自举。`ffmpeg_manager` 负责 FFmpeg 的探测、精简版/完整版识别、自动下载与能力缓存；
+`runtime_manager` 负责离线运行时（`runtime.zip`）的完整性校验与从 GitHub Release 拉取。
 
 ## 配置说明
 
 ### 配置文件位置（便携模式）
-程序采用**便携模式**，所有数据均存放在程序目录（exe 所在目录）下，**不写入系统 AppData**：
+程序采用**便携模式**，所有数据均存放在程序目录下（相对 `app.py` / exe 解析，**不写死任何绝对路径**），
+**不写入系统 AppData**，因此整个文件夹可以随意移动或改名：
 
 - **配置**: `<程序目录>/config/config.yaml`
 - **日志**: `<程序目录>/logs/`
 - **临时文件**: `<程序目录>/TEMP/`
 - **下载目录**: `<程序目录>/Download/`
-- **核心文件**: `<程序目录>/resources/`
+- **离线运行时**: `<程序目录>/runtime/`（首次安装时拉取，不入库）
+- **FFmpeg**: `<程序目录>/resources/ffmpeg.exe`（首次运行自动下载，不入库）
+- **图标**: `<程序目录>/resources/app.ico`（唯一入库的二进制资源）
 
-> 说明：核心程序（JiuDownCore）自身硬编码读取 `%APPDATA%\JiJiDown\config.yaml`，为保持便携，应用启动时会通过 Windows 目录联接（junction）把该路径重定向到 `<程序目录>/config/core-data/`，核心的实际读写全部落在应用目录，AppData 中仅保留一个链接条目、不存放任何数据。旧版本写入 `%APPDATA%\JiuDown` 的配置会在首次启动时自动迁移到便携目录并清理旧目录。
+> 旧版本写入 `%APPDATA%\JiuDown` / `%APPDATA%\SHOUDown` 的配置会在首次启动时迁移到便携目录并清理旧目录。
 
 ### 主要配置项
 

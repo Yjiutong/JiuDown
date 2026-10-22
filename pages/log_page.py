@@ -1,42 +1,85 @@
 """
-日志页
-核心运行日志（彩色分级）与下载记录展示，提供开始/停止核心、清空日志操作
+运行日志页
+引擎运行日志（彩色分级）+ 下载记录展示，提供清空面板与打开日志目录操作
+
+日志来源：模块级 loguru sink 把日志写入一个线程安全的环形缓冲，页面用定时器
+增量读取渲染。这样日志采集与 Qt 对象生命周期完全解耦——页面被销毁/重建都不会
+留下悬空回调（早期版本直接把 sink 接进 Qt 信号，控件析构时会段错误）。
 """
 
+import collections
 import html as html_mod
+import threading
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from loguru import logger
 
+import jiudown_engine
 from config_manager import config_manager
-from core_manager import core_manager
-from core_status import get_core_status, update_core_status
-from download_manager import download_log_manager
-from log_manager import log_manager
-from system_info import system_info
-from theme import C
 
 LEVEL_COLORS = {
-    "error": "#f87171",
-    "fata": "#fca5a5",
-    "warning": "#fbbf24",
-    "success": "#4ade80",
-    "info": "#39C5BB",
-    "debug": "#9bb0b2",
+    "error": "#FF453A",
+    "critical": "#FF453A",
+    "warning": "#FF9F0A",
+    "success": "#30D158",
+    "info": "#6E6E73",
+    "debug": "#8E8E93",
 }
 
 MAX_LOG_BLOCKS = 5000
 MAX_DL_BLOCKS = 2000
+_BUFFER_LIMIT = 5000
+
+# ---- 模块级日志环形缓冲（无 Qt 依赖，可在任意线程写入） ----
+_LOG_BUFFER: collections.deque = collections.deque(maxlen=_BUFFER_LIMIT)
+_BUFFER_LOCK = threading.Lock()
+_SINK_ID = None
 
 
-class _LogBridge(QObject):
-    """跨线程信号桥：核心日志回调发生在核心输出读取线程"""
-    new_log = Signal(str, str)  # line, level
+def _ensure_sink() -> None:
+    """注册一次全局 loguru sink（INFO 以上，避免调试噪声刷屏）"""
+    global _SINK_ID
+    if _SINK_ID is not None:
+        return
+
+    def sink(message) -> None:  # loguru 在写入线程内调用
+        try:
+            record = message.record
+            level = str(record["level"].name).lower()
+            line = (
+                f"{record['time'].strftime('%H:%M:%S')} | "
+                f"{level.upper():<7} | {record['message']}"
+            )
+        except Exception:
+            return
+        with _BUFFER_LOCK:
+            _LOG_BUFFER.append((line, level))
+
+    try:
+        _SINK_ID = logger.add(sink, level="INFO", format="{message}", enqueue=False)
+    except Exception:
+        _SINK_ID = None
+
+
+def snapshot_buffer() -> list[tuple[str, str]]:
+    """当前缓冲快照（供页面增量渲染）"""
+    with _BUFFER_LOCK:
+        return list(_LOG_BUFFER)
+
+
+def _latest_log_file() -> Path | None:
+    """最近一个 loguru 日志文件（logs/JiuDown_YYYY-MM-DD.log）"""
+    try:
+        files = sorted(Path("logs").glob("JiuDown_*.log"))
+        return files[-1] if files else None
+    except Exception:
+        return None
 
 
 class LogPage(QWidget):
@@ -44,23 +87,23 @@ class LogPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._bridge = _LogBridge()
-        self._bridge.new_log.connect(self._append_core_log)
-
+        _ensure_sink()
         self._build_ui()
         self._last_dl_count = 0
-        self._restore_history()
+        self._restored = False          # 历史日志延迟到首次显示时加载（避免拖慢启动）
+        self._rendered = 0              # 已渲染的缓冲条数
 
-        self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._update_button_states)
-        self._status_timer.start(2000)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000)
 
-        self._dl_timer = QTimer(self)
-        self._dl_timer.timeout.connect(self._refresh_download_logs)
-        self._dl_timer.start(1000)
-        self._refresh_download_logs()
-
-        core_manager.add_log_callback(self._on_core_log)
+    def showEvent(self, event) -> None:
+        """首次显示时才恢复历史日志（整段批量插入，毫秒级）"""
+        super().showEvent(event)
+        if not self._restored:
+            self._restore_history()
+            self._refresh_download_logs()
+            self._drain_buffer()
 
     # ---------------------------------------------------------------- UI
 
@@ -71,35 +114,31 @@ class LogPage(QWidget):
 
         info_row = QHBoxLayout()
         info_row.setSpacing(24)
-        self._core_file_label = QLabel(f"核心文件: {system_info.get_core_filename()}")
-        self._core_file_label.setProperty("muted", True)
+        version = jiudown_engine.version() or "未安装"
+        self._engine_label = QLabel(f"下载引擎: yt-dlp {version}")
+        self._engine_label.setProperty("muted", True)
         self._config_file_label = QLabel(f"配置文件: {config_manager.get_config_file_path()}")
         self._config_file_label.setProperty("muted", True)
-        info_row.addWidget(self._core_file_label)
+        info_row.addWidget(self._engine_label)
         info_row.addWidget(self._config_file_label, 1)
         layout.addLayout(info_row)
 
         # 控制区
         control = QHBoxLayout()
         control.setSpacing(10)
-        self._start_button = QPushButton("开始运行")
-        self._start_button.setProperty("primary", True)
-        self._start_button.clicked.connect(self._run_core)
-        self._stop_button = QPushButton("停止运行")
-        self._stop_button.setProperty("danger", True)
-        self._stop_button.clicked.connect(self._stop_core)
-        self._clear_button = QPushButton("清空日志")
-        self._clear_button.clicked.connect(self._clear_logs)
-        self._status_label = QLabel("核心状态: 检测中...")
-        self._status_label.setStyleSheet("font-size: 13px; font-weight: 600;")
-        control.addWidget(self._start_button)
-        control.addWidget(self._stop_button)
+        self._clear_button = QPushButton("清空面板")
+        self._clear_button.clicked.connect(self._clear_panel)
+        self._open_dir_button = QPushButton("打开日志目录")
+        self._open_dir_button.clicked.connect(self._open_log_dir)
+        self._status_label = QLabel("引擎状态: 检测中…")
+        self._status_label.setProperty("cssClass", "statusLabel")
         control.addWidget(self._clear_button)
+        control.addWidget(self._open_dir_button)
         control.addStretch()
         control.addWidget(self._status_label)
         layout.addLayout(control)
 
-        # 核心日志面板
+        # 引擎日志面板
         self._log_view = QTextEdit()
         self._log_view.setProperty("cssClass", "logPanel")
         self._log_view.setReadOnly(True)
@@ -118,19 +157,26 @@ class LogPage(QWidget):
         self._dl_view.document().setMaximumBlockCount(MAX_DL_BLOCKS)
         layout.addWidget(self._dl_view)
 
-    # ---------------------------------------------------------------- 日志
+        self._refresh_engine_state()
 
-    def _on_core_log(self, line: str, level: str) -> None:
-        """核心输出读取线程回调 -> 信号切回 UI 线程"""
-        self._bridge.new_log.emit(line, level)
+    def _refresh_engine_state(self) -> None:
+        if jiudown_engine.available():
+            self._status_label.setText(
+                f"引擎状态: 就绪（{jiudown_engine.version() or '未知版本'}）"
+            )
+            self._status_label.setProperty("tone", "green")
+        else:
+            self._status_label.setText("引擎状态: 未安装（下载不可用）")
+            self._status_label.setProperty("tone", "red")
+        self._status_label.style().unpolish(self._status_label)
+        self._status_label.style().polish(self._status_label)
 
-    def _append_core_log(self, line: str, level: str) -> None:
-        color = LEVEL_COLORS.get(level.lower(), C["log_text"])
-        self._append_colored(self._log_view, line, color)
-        try:
-            log_manager.save_log(line.strip())
-        except Exception as e:
-            logger.error(f"保存日志失败: {e}")
+    # ---------------------------------------------------------------- 渲染
+
+    def _append_log(self, line: str, level: str, color: str | None = None) -> None:
+        self._append_colored(
+            self._log_view, line, color or LEVEL_COLORS.get(level.lower(), "#86868B")
+        )
 
     @staticmethod
     def _append_colored(view: QTextEdit, line: str, color: str) -> None:
@@ -142,109 +188,94 @@ class LogPage(QWidget):
         view.setTextCursor(cursor)
         view.ensureCursorVisible()
 
+    def _drain_buffer(self) -> None:
+        """增量渲染新日志（一次 insertHtml 批量插入，避免逐行卡顿）"""
+        items = snapshot_buffer()
+        total = len(items)
+        if total <= self._rendered:
+            # 缓冲被清空/回绕：重置游标
+            if total < self._rendered:
+                self._rendered = total
+            return
+        fresh = items[self._rendered:]
+        self._rendered = total
+        if not fresh:
+            return
+        html = "".join(
+            f'<span style="color:{LEVEL_COLORS.get(level, "#86868B")};">'
+            f"{html_mod.escape(line)}</span><br/>"
+            for line, level in fresh
+        )
+        cursor = self._log_view.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(html)
+        self._log_view.setTextCursor(cursor)
+        self._log_view.ensureCursorVisible()
+
     def _restore_history(self) -> None:
-        """页面打开时恢复历史核心日志"""
+        """首次显示时回填最近一个日志文件（整段批量插入）"""
+        self._restored = True
         try:
-            previous = log_manager.load_logs()
-            if previous:
-                for log_line in previous:
-                    self._append_core_log(log_line, "debug")
-            else:
-                self._append_core_log("日志页面已打开", "info")
-                self._append_core_log(f"核心文件: {system_info.get_core_filename()}", "info")
-                self._append_core_log("点击「开始运行」启动核心", "info")
+            path = _latest_log_file()
+            if not path:
+                self._append_log("日志面板已就绪，引擎运行日志将实时显示在这里", "info")
+                return
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+            if not lines:
+                self._append_log("日志面板已就绪，引擎运行日志将实时显示在这里", "info")
+                return
+            color = LEVEL_COLORS["debug"]
+            html = "".join(
+                f'<span style="color:{color};">{html_mod.escape(line)}</span><br/>'
+                for line in lines
+            )
+            cursor = self._log_view.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertHtml(html)
+            self._log_view.setTextCursor(cursor)
+            self._log_view.ensureCursorVisible()
         except Exception as e:
-            logger.error(f"加载历史日志失败: {e}")
-            self._append_core_log(f"加载历史日志失败: {e}", "error")
+            self._append_log(f"加载历史日志失败: {e}", "error")
 
     def _refresh_download_logs(self) -> None:
+        from download_manager import download_log_manager
+
         try:
             logs = download_log_manager.load_logs()
             count = len(logs)
             if count > self._last_dl_count:
                 for log_line in logs[self._last_dl_count:]:
-                    self._append_colored(self._dl_view, log_line, C["blue_dark"])
+                    self._append_colored(self._dl_view, log_line, "#007AFF")
                 self._last_dl_count = count
             elif count < self._last_dl_count:
                 self._last_dl_count = count
         except Exception as e:
-            logger.error(f"加载下载记录失败: {e}")
+            logger.debug(f"加载下载记录失败: {e}")
+
+    def _tick(self) -> None:
+        if not self.isVisible():
+            return
+        self._drain_buffer()
+        self._refresh_download_logs()
 
     # ---------------------------------------------------------------- 操作
 
-    def _update_button_states(self) -> None:
-        update_core_status()
-        status = get_core_status()
-        running = status.get("is_running", False)
-        self._start_button.setEnabled(not running)
-        self._stop_button.setEnabled(running)
-        if running:
-            self._status_label.setText("核心状态: 正在运行")
-            self._status_label.setStyleSheet(
-                f"color: {C['green_dark']}; font-size: 13px; font-weight: 600;"
-            )
-        else:
-            self._status_label.setText("核心状态: 已停止")
-            self._status_label.setStyleSheet(
-                f"color: {C['red_dark']}; font-size: 13px; font-weight: 600;"
-            )
-
     def refresh_theme(self) -> None:
         """主题切换回调：重放状态标签内联颜色（日志面板为常驻深色控制台，不随主题反色）"""
-        self._update_button_states()
+        self._refresh_engine_state()
 
-    def _run_core(self) -> None:
-        self._append_core_log("正在启动核心...", "info")
-        self._status_label.setText("核心状态: 正在启动...")
-        self._status_label.setStyleSheet(
-            f"color: {C['orange_dark']}; font-size: 13px; font-weight: 600;"
-        )
-        self._start_button.setEnabled(False)
-
+    def _open_log_dir(self) -> None:
         try:
-            success = core_manager.start_core(str(config_manager.get_config_file_path()))
-            if success:
-                self._append_core_log("核心启动成功！", "success")
-                update_core_status()
-                self._update_button_states()
-            else:
-                self._append_core_log("核心启动失败", "error")
-                update_core_status()
-                self._update_button_states()
+            log_dir = Path("logs").resolve()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir)))
         except Exception as e:
-            self._append_core_log(f"启动核心失败: {e}", "error")
-            update_core_status()
-            self._update_button_states()
+            logger.error(f"打开日志目录失败: {e}")
 
-    def _stop_core(self) -> None:
-        self._append_core_log("正在停止核心...", "info")
-        self._status_label.setText("核心状态: 正在停止...")
-        self._status_label.setStyleSheet(
-            f"color: {C['orange_dark']}; font-size: 13px; font-weight: 600;"
-        )
-        self._stop_button.setEnabled(False)
-
-        try:
-            success = core_manager.stop_core()
-            if success:
-                self._append_core_log("核心已停止", "info")
-                update_core_status()
-                self._update_button_states()
-            else:
-                self._append_core_log("停止核心失败", "error")
-                update_core_status()
-                self._update_button_states()
-        except Exception as e:
-            self._append_core_log(f"停止核心失败: {e}", "error")
-            update_core_status()
-            self._update_button_states()
-
-    def _clear_logs(self) -> None:
-        try:
-            if log_manager.clear_logs():
-                self._log_view.clear()
-                self._append_core_log("日志已清空", "info")
-            else:
-                self._append_core_log("清空日志失败", "error")
-        except Exception as e:
-            self._append_core_log(f"清空日志失败: {e}", "error")
+    def _clear_panel(self) -> None:
+        """仅清空面板显示（磁盘日志保留，便于事后排查）"""
+        self._log_view.clear()
+        self._rendered = len(snapshot_buffer())
+        self._dl_view.clear()
+        self._last_dl_count = 0
+        self._append_log("面板已清空（磁盘日志文件仍保留，可在日志目录查看）", "info")

@@ -25,22 +25,22 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QStackedWidget, QVBoxLayout
 
-from download_manager import download_manager
-from pages.preview_panel import _extract_bvid
+import jiudown_engine
 
 # 小窗专用流代理状态（独立于大预览面板的 _PROXY_STREAM_*）
 _HOVER_STREAM_URL = ""
-_HOVER_STREAM_HEADERS = {}
-_HOVER_CACHE: dict[str, tuple[str, str]] = {}  # bvid -> (stream_url, title)（会话内复用）
+_HOVER_STREAM_HEADERS: dict = {}
+# url -> (stream_url, headers, title)（会话内复用，避免悬停反复解析）
+_HOVER_CACHE: dict[str, tuple[str, dict, str]] = {}
 
 
 class _HoverProxyHandler(http.server.BaseHTTPRequestHandler):
-    """小窗流代理：转发 B 站低清流（携带鉴权头），支持 Range 透传"""
+    """小窗流代理：转发站点直链（携带站点要求的请求头），支持 Range 透传"""
 
     def do_GET(self):
         try:
             req_h = dict(self.headers)
-            # 过滤 hop-by-hop 头：播放器的 Host 指向本地代理，透传会给 B 站造成 403
+            # 过滤 hop-by-hop 头：播放器的 Host 指向本地代理，透传会让站点判定为异常请求
             for k in ("Host", "Connection", "Accept-Encoding", "Proxy-Connection"):
                 req_h.pop(k, None)
             req_h.update(_HOVER_STREAM_HEADERS)
@@ -68,25 +68,6 @@ class _HoverProxyHandler(http.server.BaseHTTPRequestHandler):
 
 class _HoverHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
-
-
-def _resolve_stream(bvid: str, cid: int, qn: int) -> str | None:
-    """解析指定清晰度的音视频合一 durl 流地址"""
-    try:
-        api = (
-            f"{download_manager.BASE_API}/x/player/playurl"
-            f"?bvid={bvid}&cid={cid}&qn={qn}&fnval=0"
-        )
-        resp = requests.get(api, headers=download_manager._headers(bvid), timeout=20)
-        resp.raise_for_status()
-        payload = resp.json()
-        if payload.get("code") != 0:
-            return None
-        durl = (payload.get("data") or {}).get("durl") or []
-        return durl[0]["url"] if durl else None
-    except Exception as e:
-        logger.debug(f"低清流解析失败 qn={qn}: {e}")
-        return None
 
 
 class _ElideLabel(QLabel):
@@ -137,27 +118,27 @@ class HoverPreview(QFrame):
         self.setStyleSheet(
             f"""
             HoverPreview {{
-                background: #0b1220;
-                border: 1px solid rgba(57, 197, 187, 0.45);
+                background: #0A0A0A;
+                border: 1px solid rgba(10, 132, 255, 0.45);
             }}
             QFrame#hoverCaption {{
-                background: #101a2c;
+                background: #1C1C1E;
                 border-top-left-radius: {self.RADIUS - 1}px;
                 border-top-right-radius: {self.RADIUS - 1}px;
-                border-bottom: 1px solid #1e2b3f;
+                border-bottom: 1px solid #3A3A3C;
             }}
-            QLabel#hoverTitle {{ color: #e9f2f1; font-size: 11px; background: transparent; }}
+            QLabel#hoverTitle {{ color: #F5F5F7; font-size: 11px; background: transparent; }}
             QLabel#hoverBadge {{
-                color: #8fe8de; background: rgba(57, 197, 187, 0.16);
+                color: #64D2FF; background: rgba(10, 132, 255, 0.20);
                 border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 600;
             }}
-            QLabel#hoverDot {{ background: #39C5BB; border-radius: 3px; }}
+            QLabel#hoverDot {{ background: #0A84FF; border-radius: 3px; }}
             """
         )
         self._ratio_w = 16
         self._ratio_h = 9
         self._anchor = None
-        self._bvid = ""          # 当前预览的 bvid（供锚点移除时比对）
+        self._target_url = ""    # 当前预览的链接（供锚点移除时比对）
         self._hide_timer: QTimer | None = None
         self._build_ui()
         self._apply_size()
@@ -206,16 +187,16 @@ class HoverPreview(QFrame):
         lay.addWidget(self.stack)
 
         self.video = QVideoWidget()
-        self.video.setStyleSheet("background: #0b1220;")
+        self.video.setStyleSheet("background: #0A0A0A;")
         self.video.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
         self.stack.addWidget(self.video)
 
         msg_page = QFrame()
-        msg_page.setStyleSheet("background: #0b1220;")
+        msg_page.setStyleSheet("background: #0A0A0A;")
         msg_lay = QVBoxLayout(msg_page)
         msg_lay.setContentsMargins(20, 0, 20, 0)
         self.msg_label = QLabel("正在加载低清预览…")
-        self.msg_label.setStyleSheet("color: #e9f2f1; font-size: 12px;")
+        self.msg_label.setStyleSheet("color: #F0F0F0; font-size: 12px;")
         self.msg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.msg_label.setWordWrap(True)
         msg_lay.addWidget(self.msg_label)
@@ -284,12 +265,9 @@ class HoverPreview(QFrame):
 
     def serving(self, url: str) -> bool:
         """小窗是否正在预览该链接（供标签卡移除时判断是否连带退场）"""
-        if not self._bvid:
+        if not self._target_url:
             return False
-        try:
-            return self._bvid == _extract_bvid(url)
-        except ValueError:
-            return False
+        return self._target_url == jiudown_engine.normalize_url(url)
 
     def _apply_mask(self) -> None:
         """整窗圆角遮罩：视频四角随之收圆（子控件不受父级圆角裁剪，须显式遮罩）"""
@@ -357,55 +335,47 @@ class HoverPreview(QFrame):
 
     def show_preview(self, url: str) -> None:
         """解析并播放该链接的低清流"""
-        try:
-            bvid = _extract_bvid(url)
-        except ValueError as e:
-            self._show_msg(str(e))
+        target = jiudown_engine.normalize_url(url)
+        if not target:
+            self._show_msg("链接无法识别")
             return
-        # 同一视频正在播放中：不重复解析/重播（避免鼠标在标签卡上移动时画面重启）
-        if (self.isVisible() and self._bvid == bvid
+        # 同一链接正在播放中：不重复解析/重播（避免鼠标在标签卡上移动时画面重启）
+        if (self.isVisible() and self._target_url == target
                 and self.stack.currentIndex() == 0):
             return
         self._player.stop()
-        self._bvid = bvid
-        self.caption_title.setFullText(bvid)
-        cached = _HOVER_CACHE.get(bvid)
+        self._target_url = target
+        self.caption_title.setFullText(target)
+        cached = _HOVER_CACHE.get(target)
         if cached:
-            stream_url, title = cached
+            stream_url, headers, title = cached
             global _HOVER_STREAM_URL, _HOVER_STREAM_HEADERS
             _HOVER_STREAM_URL = stream_url
-            _HOVER_STREAM_HEADERS = download_manager._headers(bvid)
+            _HOVER_STREAM_HEADERS = headers
             self._play_ready(title)
             return
         self._show_msg("正在加载低清预览…")
-        threading.Thread(target=self._worker, args=(bvid,), daemon=True).start()
+        threading.Thread(target=self._worker, args=(target,), daemon=True).start()
 
-    def _worker(self, bvid: str) -> None:
-        """工作线程：取视频信息（标题/cid）→ qn=16 优先，失败回退 qn=32"""
+    def _worker(self, url: str) -> None:
+        """工作线程：yt-dlp 解析最低画质（音视频合一优先）的直链"""
         try:
-            info = download_manager._video_info(bvid)
-            cid = info.get("cid")
-            title = info.get("title") or bvid
+            info = jiudown_engine.resolve_stream(url, prefer="worst")
         except Exception as e:
-            logger.debug(f"低清预览获取视频信息失败: {e}")
-            self.failed.emit("视频信息获取失败（可下载完成后本地预览）")
+            logger.debug(f"低清预览解析失败: {e}")
+            self.failed.emit(str(e))
             return
-        if not cid:
-            self.failed.emit("未获取到视频 cid")
-            return
-        stream_url = None
-        for qn in (16, 32):
-            stream_url = _resolve_stream(bvid, cid, qn)
-            if stream_url:
-                break
+        stream_url = info.get("url") or ""
         if not stream_url:
-            logger.warning(f"低清预览无可用流: {bvid}")
+            logger.warning(f"低清预览无可用流: {url}")
             self.failed.emit("暂无低清在线流（可下载完成后本地预览）")
             return
-        _HOVER_CACHE[bvid] = (stream_url, title)
+        title = info.get("title") or url
+        headers = info.get("headers") or {}
+        _HOVER_CACHE[url] = (stream_url, headers, title)
         global _HOVER_STREAM_URL, _HOVER_STREAM_HEADERS
         _HOVER_STREAM_URL = stream_url
-        _HOVER_STREAM_HEADERS = download_manager._headers(bvid)
+        _HOVER_STREAM_HEADERS = headers
         self.ready.emit(title)
 
     def _play_ready(self, title: str = "") -> None:
@@ -436,5 +406,5 @@ class HoverPreview(QFrame):
         self._player.stop()
         self._stop_self_hide()
         self._anchor = None   # 锚点引用清掉：防止指向已删除的标签卡
-        self._bvid = ""
+        self._target_url = ""
         self.hide()

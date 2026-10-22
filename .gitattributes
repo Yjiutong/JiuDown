@@ -1,0 +1,9 @@
+# 启动脚本的换行/编码必须锁死，否则克隆后编码会被改写
+# （启动.vbs 为 UTF-16LE 带 BOM：含 NUL 字节，必须按二进制处理）
+*.vbs binary
+*.bat text eol=crlf
+
+# 二进制资源
+*.ico binary
+*.png binary
+*.exe binary

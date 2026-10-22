@@ -1,11 +1,11 @@
 """
-下载页
-B站视频链接批量输入、清晰度/格式/保存目录设置、多任务进度卡片
+下载页（站点无关）
+链接批量输入（任意 yt-dlp 支持的站点）、画质/格式/保存目录设置、多任务进度卡片
 """
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QMouseEvent, QPainter,
     QPen, QTextCursor,
@@ -23,11 +23,18 @@ from config_manager import config_manager
 from download_manager import download_manager, download_log_manager
 from pages.preview_panel import PreviewPanel
 from theme import C
+# 画质/格式档位由引擎统一定义，避免 UI 与引擎各写一份导致漂移
+from jiudown_engine import FORMAT_CHOICES as FORMATS, QUALITY_CHOICES as QUALITIES
+from jiudown_engine import normalize_url as _engine_normalize_url
 
-QUALITIES = ["360P", "480P", "720P", "1080P"]
-FORMATS = ["mp4", "flv", "mp3", "wav"]  # wav = 纯音频（需完整版 ffmpeg）
 AUDIO_FORMATS = {"mp3", "wav"}
 CHANNELS = ["单声道", "双声道"]
+
+
+def normalize_url(raw: str) -> str:
+    """兼容旧引用：实现已上移到 jiudown_engine，预览面板与下载页共用同一套判定"""
+    return _engine_normalize_url(raw)
+
 
 STATUS_BADGE = {
     "queued": ("gray", "等待中"),
@@ -38,18 +45,6 @@ STATUS_BADGE = {
     "failed": ("red", "失败"),
     "cancelled": ("gray", "已取消"),
 }
-
-def _badge_colors(tone: str) -> tuple[str, str]:
-    """徽章（背景, 文字）配色：按当前主题懒解析，跟随主题切换"""
-    table = {
-        "gray": (C["gray_bg"], C["gray_dark"]),
-        "orange": (C["orange_bg"], C["orange_dark"]),
-        "blue": (C["blue_bg"], C["blue_dark"]),
-        "cyan": (C["cyan_bg"], C["cyan_dark"]),
-        "green": (C["green_bg"], C["green_dark"]),
-        "red": (C["red_bg"], C["red_dark"]),
-    }
-    return table.get(tone, table["gray"])
 
 PROGRESS_COLOR = {
     "completed": "green",
@@ -85,7 +80,7 @@ class _DeleteIconButton(QPushButton):
         super().__init__(parent)
         self.setFixedSize(24, 24)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("删除该标签")
+        self.setToolTip("")  # 无提示气泡：悬停时不该被气泡遮挡预览画面
         self._hover = False
         self._pressed = False
 
@@ -100,7 +95,7 @@ class _DeleteIconButton(QPushButton):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.Left:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._pressed = True
             self.update()
         super().mousePressEvent(event)
@@ -113,7 +108,8 @@ class _DeleteIconButton(QPushButton):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # 底色：常态透明 → 悬停淡红 → 按下加深
+        w, h = self.width(), self.height()
+        # 底色：常态浅灰（给出可点击的按钮形态）→ 悬停淡红 → 按下加深
         if self._pressed:
             bg = QColor(C["red"])
             bg.setAlphaF(0.18)
@@ -121,21 +117,21 @@ class _DeleteIconButton(QPushButton):
             bg = QColor(C["red"])
             bg.setAlphaF(0.10)
         else:
-            bg = None
-        if bg is not None:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(bg)
-            p.drawRoundedRect(self.rect(), 7, 7)
-        # 字形：圆头 ×（与导航图标统一的笔触重量 ≈ 画布 9%）
+            bg = QColor(C["gray_bg"])
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(bg)
+        p.drawRoundedRect(QRectF(0, 0, w, h), w * 0.30, w * 0.30)
+        # 字形：圆头 ×，按按钮实际尺寸绘制（此前用 48 画布坐标未缩放，被裁成一道斜杠）
         glyph = C["red_dark"] if self._pressed else (
-            C["red"] if self._hover else C["text_faint"]
+            C["red"] if self._hover else C["text_muted"]
         )
-        pen = QPen(QColor(glyph), 4.4)
+        pen = QPen(QColor(glyph), max(2.0, w * 0.095))
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawLine(QPointF(16.5, 16.5), QPointF(31.5, 31.5))
-        p.drawLine(QPointF(31.5, 16.5), QPointF(16.5, 31.5))
+        inset = w * 0.31
+        p.drawLine(QPointF(inset, inset), QPointF(w - inset, h - inset))
+        p.drawLine(QPointF(w - inset, inset), QPointF(inset, h - inset))
         p.end()
 
 
@@ -153,7 +149,7 @@ class TagCard(QFrame):
     def __init__(self, url: str, quality: str, file_format: str, parent=None):
         super().__init__(parent)
         self.setProperty("cssClass", "card")
-        self.setToolTip("双击恢复为文本链接；右键调整参数或预览；悬停预览低清画面")
+        # 不设 tooltip：悬停标签卡应弹出低清预览，提示气泡会盖住预览画面
         self.url = url
         self.quality = quality
         self.file_format = file_format
@@ -168,7 +164,7 @@ class TagCard(QFrame):
         self.url_label = QLabel(url)
         self.url_label.setProperty("cssClass", "taskDetail")
         self.url_label.setWordWrap(True)
-        self.url_label.setToolTip(url)
+        # 不设 tooltip：链接本身已完整显示，悬停时应弹出低清预览而非重复链接气泡
         self.format_badge = QLabel(file_format)
         self.format_badge.setProperty("cssClass", "badgeCyan")
         self.quality_badge = QLabel(quality)
@@ -211,7 +207,9 @@ class TagCard(QFrame):
         super().leaveEvent(event)
 
     def contextMenuEvent(self, event) -> None:
-        menu = QMenu(self)
+        # 挂到顶层窗口而不是标签卡本身：QMenu 是独立弹出窗口，若父链上有控件级
+        # setStyleSheet（裸声明会级联），菜单背景会被覆盖成透明 → 黑底看不清字
+        menu = QMenu(self.window())
         fmt_menu = menu.addMenu(f"格式: {self.file_format}")
         fmt_group = QActionGroup(menu)
         fmt_group.setExclusive(True)
@@ -369,11 +367,10 @@ class TaskCard(QFrame):
         )
 
     def _set_badge(self, tone: str, text: str) -> None:
-        bg, fg = _badge_colors(tone)
         self.badge_label.setText(text)
-        self.badge_label.setStyleSheet(
-            f"background: {bg}; color: {fg}; border-radius: 10px; padding: 2px 10px; font-size: 11px; font-weight: 600;"
-        )
+        self.badge_label.setProperty("cssClass", f"badge{tone.capitalize()}")
+        self.badge_label.style().unpolish(self.badge_label)
+        self.badge_label.style().polish(self.badge_label)
 
     def update_task(self, task: dict) -> None:
         self.title_label.setText(task.get("title") or "等待解析标题...")
@@ -402,21 +399,39 @@ class TaskCard(QFrame):
         self.progress_bar.style().unpolish(self.progress_bar)
         self.progress_bar.style().polish(self.progress_bar)
 
-        if status == "downloading" and task.get("total_size"):
+        meta_bits = []
+        if task.get("extractor"):
+            meta_bits.append(str(task["extractor"]))
+        if task.get("duration"):
+            meta_bits.append(download_manager.format_duration(task["duration"]))
+        if int(task.get("playlist_count") or 0) > 1:
+            meta_bits.append(f"合集 {task['playlist_count']} 项")
+        meta = " · ".join(meta_bits)
+
+        if status in ("downloading", "merging") and task.get("total_size"):
             downloaded = task.get("downloaded_size") or 0
             total = task.get("total_size") or 0
             speed = task.get("speed") or 0
-            detail = f"{download_manager.format_file_size(downloaded)} / {download_manager.format_file_size(total)}"
+            detail = (
+                f"{download_manager.format_file_size(downloaded)} / "
+                f"{download_manager.format_file_size(total)}"
+            )
             if speed:
                 detail += f" | {download_manager.format_speed(speed)}"
-            self.detail_label.setText(detail)
-            self.detail_label.setStyleSheet(f"color: {C['text_secondary']};")
+            self.detail_label.setText(f"{meta} · {detail}" if meta else detail)
+            self.detail_label.setProperty("cssClass", "taskDetail")
+        elif status == "completed":
+            size_text = download_manager.format_file_size(task.get("total_size") or 0)
+            self.detail_label.setText(f"{meta} · {size_text}" if meta else size_text)
+            self.detail_label.setProperty("cssClass", "taskDetail")
         elif status == "failed":
             self.detail_label.setText(task.get("error", ""))
-            self.detail_label.setStyleSheet(f"color: {C['red_dark']};")
+            self.detail_label.setProperty("cssClass", "taskError")
         else:
-            self.detail_label.setText("")
-            self.detail_label.setStyleSheet(f"color: {C['text_secondary']};")
+            self.detail_label.setText(meta)
+            self.detail_label.setProperty("cssClass", "taskDetail")
+        self.detail_label.style().unpolish(self.detail_label)
+        self.detail_label.style().polish(self.detail_label)
 
         self.retry_button.setVisible(status == "failed")
         self.open_button.setVisible(
@@ -489,7 +504,8 @@ class DownloadPage(QWidget):
 
         self.url_input = UrlInputEdit()
         self.url_input.setPlaceholderText(
-            "每行一个链接，例如：\nhttps://www.bilibili.com/video/BV...\n（回车立即固定为标签，Shift+回车换行）"
+            "每行一个链接（支持 B 站 / YouTube / 抖音 等 1000+ 站点）\n"
+            "回车固定为标签，Shift+回车换行"
         )
         # 固定输入框高度，避免其 Expanding 策略在滚动容器中撑开卡片
         self.url_input.setFixedHeight(72)
@@ -534,7 +550,10 @@ class DownloadPage(QWidget):
         input_vbox.addWidget(self.tag_hint)
 
         self.tag_host = QWidget()
-        self.tag_host.setStyleSheet("background: transparent;")
+        # 透明底在 theme.py 的全局 QSS 里按 objectName 上色；
+        # 不要用 setStyleSheet("background: transparent;")——裸声明会级联到
+        # 标签卡弹出的右键菜单，把菜单背景覆盖成透明（最终呈现为纯黑底）。
+        self.tag_host.setObjectName("tagHost")
         self.tag_layout = QVBoxLayout(self.tag_host)
         self.tag_layout.setContentsMargins(0, 0, 0, 0)
         self.tag_layout.setSpacing(6)
@@ -547,8 +566,10 @@ class DownloadPage(QWidget):
             f"当前最大并发: {config_manager.get_max_task()}，可在设置中调整"
         )
         self.concurrent_label.setProperty("muted", True)
-        add_button = QPushButton("开始")
+        add_button = QPushButton("开始下载")
         add_button.setProperty("primary", True)
+        add_button.setProperty("cta", True)   # 主行动按钮：更大、更醒目
+        add_button.setCursor(Qt.CursorShape.PointingHandCursor)
         add_button.clicked.connect(self._add_tasks)
         clear_button = QPushButton("清空已完成")
         clear_button.clicked.connect(self._clear_completed)
@@ -567,11 +588,8 @@ class DownloadPage(QWidget):
         self.page_scroll = QScrollArea()
         self.page_scroll.setWidgetResizable(True)
         self.page_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.page_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-        )
         page_host = QWidget()
-        page_host.setStyleSheet("background: transparent;")
+        page_host.setObjectName("pageHost")
         layout = QVBoxLayout(page_host)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -590,7 +608,7 @@ class DownloadPage(QWidget):
         empty_title.setProperty("cssClass", "emptyTitle")
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_hint = QLabel(
-            "粘贴 B 站链接后回车固定为标签，点击“开始”加入下载队列；"
+            "粘贴 B 站链接后回车固定为标签，点击“开始下载”加入队列；"
             "悬停标签可预览低清画面"
         )
         empty_hint.setProperty("cssClass", "emptyHint")
@@ -601,7 +619,7 @@ class DownloadPage(QWidget):
         layout.addWidget(self.empty_state)
 
         self.list_host = QWidget()
-        self.list_host.setStyleSheet("background: transparent;")
+        self.list_host.setObjectName("taskListHost")
         self.list_layout = QVBoxLayout(self.list_host)
         self.list_layout.setContentsMargins(0, 0, 0, 0)
         self.list_layout.setSpacing(10)
@@ -634,9 +652,15 @@ class DownloadPage(QWidget):
     # ---------------------------------------------------------------- 标签
 
     def _commit_lines(self, text: str) -> None:
-        """回车：将输入框中全部非空行按当前后缀/参数快照固定为标签卡"""
-        urls = [line.strip() for line in text.splitlines() if line.strip()]
+        """回车：把输入框里的有效链接按当前参数快照固定为标签卡"""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return
+        urls = [u for u in (normalize_url(line) for line in lines) if u]
         if not urls:
+            self.tag_hint.setText(
+                "没有识别到有效链接：请粘贴以 http(s):// 开头的视频地址"
+            )
             return
         quality = self.quality_select.currentText()
         file_format = self.format_select.currentText()
@@ -644,6 +668,11 @@ class DownloadPage(QWidget):
             self._add_tag(u, quality, file_format)
         self.url_input.clear()
         self._update_tag_hint()
+        skipped = len(lines) - len(urls)
+        if skipped:
+            self.tag_hint.setText(
+                f"已添加 {len(urls)} 个链接，忽略 {skipped} 行无法识别的内容"
+            )
 
     def _add_tag(self, url: str, quality: str, file_format: str) -> None:
         card = TagCard(url, quality, file_format)
@@ -725,7 +754,7 @@ class DownloadPage(QWidget):
     def _update_tag_hint(self) -> None:
         if self._tag_cards:
             self.tag_hint.setText(
-                f"已固定 {len(self._tag_cards)} 个标签 · 悬停标签预览低清画面 · 右键调整参数 · 双击恢复文本 · 点击“开始”加入下载"
+                f"已固定 {len(self._tag_cards)} 个标签 · 悬停标签预览低清画面 · 右键调整参数 · 双击恢复文本 · 点击“开始下载”加入队列"
             )
         else:
             self.tag_hint.setText(
@@ -907,10 +936,14 @@ class DownloadPage(QWidget):
 
     def _add_tasks(self) -> None:
         text = self.url_input.toPlainText()
-        urls = [line.strip() for line in text.splitlines() if line.strip()]
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        urls = [u for u in (normalize_url(line) for line in lines) if u]
         if not urls and not self._tag_cards:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "提示", "请输入B站视频链接")
+            QMessageBox.information(
+                self, "提示",
+                "请输入视频链接（支持 B 站、YouTube、抖音等 1000+ 站点）",
+            )
             return
 
         config_manager.set_config("download_dir", self.dir_input.text())

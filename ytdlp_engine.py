@@ -1,0 +1,705 @@
+"""
+yt-dlp 下载引擎封装（站点无关）
+
+设计目标
+- 本项目不再内置任何站点私有接口：解析、格式选择、分片下载、合并全部交给 yt-dlp，
+  因此 B 站、YouTube、X、抖音、Vimeo 等 yt-dlp 支持的站点走同一条链路。
+- 对外只暴露四个能力：
+    probe(url)                     解析元数据（标题/时长/站点/缩略图），用于任务卡展示
+    download(...)                  按画质/格式下载，进度经 hook 回调
+    resolve_stream(url, prefer)    取一条可直接播放的直链 + 请求头，供预览面板/悬停小窗使用
+    available()/version()          引擎自检，用于首页状态与错误提示
+- 所有 YouTubeDL 参数都从 config_manager 派生（代理 / Cookie / 限速 / 播放列表上限），
+  业务层不直接接触 yt-dlp 选项字典。
+
+线程模型
+- extract_info / download 都是阻塞调用，必须在后台线程执行（download_manager 用
+  asyncio.to_thread，预览模块用 threading.Thread）。
+- yt-dlp 的 progress hook 在下载线程内被调用；回调实现必须自己保证线程安全。
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import re
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from loguru import logger
+
+# 画质档位 → 期望的最大视频高度（None = 不限制，取最高）
+QUALITY_HEIGHTS: dict[str, Optional[int]] = {
+    "最高": None,
+    "1080P": 1080,
+    "720P": 720,
+    "480P": 480,
+    "360P": 360,
+}
+DEFAULT_QUALITY = "720P"
+QUALITY_CHOICES = list(QUALITY_HEIGHTS.keys())
+
+AUDIO_FORMATS = {"mp3", "wav"}
+VIDEO_FORMATS = {"mp4", "flv", "mkv", "webm"}
+FORMAT_CHOICES = ["mp4", "flv", "mp3", "wav"]
+
+# Cookie 来源下拉的可选值（与 settings_page 保持一致）
+COOKIE_BROWSERS = ["不使用", "chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium"]
+
+_ydl_lock = threading.Lock()
+_ydl_module: Any = None
+_version_cache: Optional[str] = None
+_site_count_cache: Optional[int] = None
+_site_thread: Optional[threading.Thread] = None
+
+
+# =====================================================================
+# 引擎自检
+# =====================================================================
+
+
+def _load_module():
+    """延迟导入 yt_dlp（缺失时抛可读异常，而不是在模块导入期崩溃）"""
+    global _ydl_module
+    if _ydl_module is None:
+        with _ydl_lock:
+            if _ydl_module is None:
+                import yt_dlp  # noqa: PLC0415
+
+                _ydl_module = yt_dlp
+    return _ydl_module
+
+
+def available() -> bool:
+    """引擎是否可用（yt-dlp Python 包是否已安装）"""
+    if _ydl_module is not None:
+        return True
+    return importlib.util.find_spec("yt_dlp") is not None
+
+
+def version() -> str:
+    """引擎版本号；不可用时返回空串
+
+    优先读包元数据（毫秒级），避免在启动路径上 import 整个 yt_dlp 包（较重）。
+    """
+    global _version_cache
+    if _version_cache is not None:
+        return _version_cache
+    try:
+        from importlib.metadata import version as pkg_version  # noqa: PLC0415
+
+        _version_cache = pkg_version("yt-dlp")
+    except Exception:
+        try:
+            if _ydl_module is None and not available():
+                _version_cache = ""
+            else:
+                from yt_dlp.version import __version__ as v  # noqa: PLC0415
+
+                _version_cache = str(v)
+        except Exception:
+            _version_cache = ""
+    return _version_cache or ""
+
+
+def supported_site_count() -> int:
+    """yt-dlp 内置提取器数量（≈ 支持站点数），结果缓存
+
+    首次统计需要遍历 ~2000 个提取器（约 0.3~0.8s），不要在主线程直接调用，
+    优先用 request_site_count() 预热 + 轮询。
+    """
+    global _site_count_cache
+    if _site_count_cache is not None:
+        return _site_count_cache
+    try:
+        from yt_dlp.extractor import gen_extractor_classes  # noqa: PLC0415
+
+        count = sum(1 for _ in gen_extractor_classes())
+        _site_count_cache = int(count)
+    except Exception as e:
+        logger.debug(f"统计 yt-dlp 支持站点数失败（忽略）: {e}")
+        _site_count_cache = 0
+    return _site_count_cache or 0
+
+
+def request_site_count() -> Optional[int]:
+    """非阻塞取站点数：已就绪直接返回，否则起一次后台预热并返回 None
+
+    刻意不用「后台线程 → Qt 信号」的写法：页面销毁后线程仍可能回调，
+    会造成悬空对象访问（段错误）。改为主线程轮询一个纯数据缓存，最安全。
+    """
+    global _site_thread
+    if _site_count_cache is not None:
+        return _site_count_cache
+    if _site_thread is None or not _site_thread.is_alive():
+        _site_thread = threading.Thread(
+            target=supported_site_count, name="ytdlp-site-count", daemon=True
+        )
+        _site_thread.start()
+    return None
+
+
+class EngineError(RuntimeError):
+    """引擎层可读错误：直接展示给用户，不带 yt-dlp 的堆栈噪声"""
+
+
+def normalize_url(raw: str) -> str:
+    """规范化用户输入的链接；无法识别为网址时返回空串
+
+    - 去掉首尾空白与引号
+    - 缺少协议时按域名形态补 https://（如 www.bilibili.com/video/BV…）
+    - 只接受 http/https
+    """
+    text = (raw or "").strip().strip("\"'")
+    if not text:
+        return ""
+    if "://" not in text:
+        if re.match(r"^[\w.-]+\.[A-Za-z]{2,}(?:[/?#]|$)", text):
+            text = "https://" + text
+        else:
+            return ""
+    return text if text.startswith(("http://", "https://")) else ""
+
+
+# =====================================================================
+# 日志桥接
+# =====================================================================
+
+
+class _LoguruBridge:
+    """把 yt-dlp 的日志转发到 loguru（避免它直接 print 到不存在的控制台）"""
+
+    _PREFIX = {
+        "DEBUG": "debug",
+        "INFO": "info",
+        "WARNING": "warning",
+        "ERROR": "error",
+    }
+
+    def debug(self, msg: str) -> None:
+        if msg.startswith("[debug] "):
+            logger.opt(depth=1).debug(msg[8:])
+        else:
+            logger.opt(depth=1).debug(msg)
+
+    def info(self, msg: str) -> None:
+        logger.opt(depth=1).debug(msg)
+
+    def warning(self, msg: str) -> None:
+        logger.opt(depth=1).warning(msg)
+
+    def error(self, msg: str) -> None:
+        logger.opt(depth=1).error(msg)
+
+
+# =====================================================================
+# 由配置构造选项
+# =====================================================================
+
+
+def _ffmpeg_location() -> Optional[str]:
+    """FFmpeg 路径：优先配置项，其次 PATH"""
+    try:
+        from config_manager import config_manager  # noqa: PLC0415
+
+        path = config_manager.get_ffmpeg_path()
+    except Exception:
+        path = ""
+    if path and Path(path).exists():
+        return str(Path(path).parent if Path(path).is_file() else Path(path))
+    # 配置路径不存在时退回运行时自带的 ffmpeg（与 ffmpeg_manager 同目录）
+    try:
+        import ffmpeg_manager  # noqa: PLC0415
+
+        resolved = Path(ffmpeg_manager.get_ffmpeg_path())
+        if resolved.exists():
+            return str(resolved.parent)
+    except Exception:
+        pass
+    return None
+
+
+def _config_get(key: str, default):
+    try:
+        from config_manager import config_manager  # noqa: PLC0415
+
+        value = config_manager.get_config(key)
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def _base_opts(progress_hooks: Optional[list] = None,
+               postprocessor_hooks: Optional[list] = None) -> dict:
+    """公共 YouTubeDL 参数：代理 / Cookie / 限速 / 并发分片 / 播放列表上限"""
+    limit_bytes = 0
+    try:
+        limit_bytes = int(_config_get("download_speed_limit", 0) or 0)
+    except Exception:
+        limit_bytes = 0
+
+    playlist_limit = 1
+    try:
+        playlist_limit = int(_config_get("playlist_limit", 1) or 1)
+    except Exception:
+        playlist_limit = 1
+    playlist_limit = max(1, min(playlist_limit, 500))
+
+    opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "logger": _LoguruBridge(),
+        "noplaylist": playlist_limit <= 1,
+        "socket_timeout": 20,
+        "retries": 3,
+        "fragment_retries": 3,
+        "extractor_retries": 2,
+        "trim_file_name": 120,
+        "windowsfilenames": True,
+        "consoletitle": False,
+        "call_home": False,
+        "cachedir": False,
+        "ignoreerrors": False,
+        "concurrent_fragment_downloads": 4,
+    }
+    if playlist_limit > 1:
+        opts["playlistend"] = playlist_limit
+
+    ffmpeg = _ffmpeg_location()
+    if ffmpeg:
+        opts["ffmpeg_location"] = ffmpeg
+
+    if limit_bytes > 0:
+        opts["ratelimit"] = limit_bytes
+
+    proxy = str(_config_get("proxy", "") or "").strip()
+    if proxy:
+        opts["proxy"] = proxy
+
+    browser = str(_config_get("cookies_from_browser", "不使用") or "不使用").strip()
+    cooked = _cookie_file()
+    if browser and browser not in ("不使用", "none", "off"):
+        # yt-dlp 期望四元组 (browser, profile, keyring, container)
+        opts["cookiesfrombrowser"] = (browser, None, None, None)
+    elif cooked:
+        opts["cookiefile"] = cooked
+
+    if progress_hooks:
+        opts["progress_hooks"] = list(progress_hooks)
+    if postprocessor_hooks:
+        opts["postprocessor_hooks"] = list(postprocessor_hooks)
+    return opts
+
+
+def _cookie_file() -> Optional[str]:
+    """配置里手填的 cookie 文本落成临时 cookies.txt（Netscape 格式）"""
+    raw = ""
+    try:
+        from config_manager import config_manager  # noqa: PLC0415
+
+        info = config_manager.get_user_info() or {}
+        raw = str(info.get("raw-cookies") or info.get("cookies") or "").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        from system_info import system_info  # noqa: PLC0415
+
+        target = Path(system_info.get_config_dir()) / "cookies.txt"
+        lines = ["# Netscape HTTP Cookie File"]
+        if raw.startswith("{"):
+            import json  # noqa: PLC0415
+
+            pairs = (json.loads(raw) or {}).items()
+        else:
+            pairs = []
+            for part in raw.split(";"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    pairs.append((k.strip(), v.strip()))
+        for k, v in pairs:
+            lines.append(f".youtube.com\tTRUE\t/\tTRUE\t0\t{k}\t{v}")
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(target)
+    except Exception as e:
+        logger.debug(f"写入 cookies.txt 失败（忽略）: {e}")
+        return None
+
+
+# =====================================================================
+# 格式选择
+# =====================================================================
+
+
+def format_selector(quality: str, file_format: str) -> str:
+    """画质档位 + 输出格式 → yt-dlp format 选择器
+
+    - 纯音频：只要音频流（bestaudio），后续由 FFmpegExtractAudio 转码
+    - 视频：优先「视频流+音频流」合并，逐级降级到单文件流，最终兜底 best
+    """
+    if file_format in AUDIO_FORMATS:
+        return "bestaudio/best"
+    height = QUALITY_HEIGHTS.get(quality, 720)
+    if height is None:
+        return "bestvideo*+bestaudio/best"
+    return (
+        f"bestvideo[height<={height}]+bestaudio/"
+        f"best[height<={height}]/"
+        f"bestvideo[height<={height}]+bestaudio/best"
+    )
+
+
+_AUDIO_CODEC = {"mp3": "libmp3lame", "wav": "pcm_s16le"}
+
+
+def _ffmpeg_exe() -> str:
+    """取 ffmpeg 可执行文件路径（与 ffmpeg_manager 保持一致）"""
+    try:
+        import ffmpeg_manager  # noqa: PLC0415
+
+        path = str(ffmpeg_manager.get_ffmpeg_path())
+        if Path(path).exists():
+            return path
+    except Exception:
+        pass
+    location = _ffmpeg_location()
+    if location:
+        candidate = Path(location) / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+        if candidate.exists():
+            return str(candidate)
+    return "ffmpeg"
+
+
+def _ffmpeg_convert(
+    source: Path,
+    target: Path,
+    file_format: str,
+    channels: str = "双声道",
+) -> Path:
+    """用应用自带的 ffmpeg 转封装/转码
+
+    为什么不用 yt-dlp 的 FFmpegExtractAudio：它依赖 ffprobe 探测编码格式，而应用
+    内置的 ffmpeg 是单文件版本（不含 ffprobe），会报 "unable to obtain file audio
+    codec with ffprobe"。这里直接按目标编码调用 ffmpeg，行为可控且无需额外依赖。
+    """
+    exe = _ffmpeg_exe()
+    if file_format in AUDIO_FORMATS:
+        cmd = [exe, "-y", "-i", str(source), "-vn",
+               "-c:a", _AUDIO_CODEC.get(file_format, "libmp3lame"),
+               "-ac", "1" if channels == "单声道" else "2",
+               str(target)]
+    else:
+        # flv：仅重封装，不重编码
+        cmd = [exe, "-y", "-i", str(source), "-c", "copy", str(target)]
+
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=60 * 60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if proc.returncode != 0 or not target.exists():
+        stderr = proc.stderr or ""
+        if "does not contain any stream" in stderr:
+            raise EngineError("该视频没有音频轨，无法导出 mp3/wav")
+        tail = stderr.strip().splitlines()[-1:]
+        reason = tail[0] if tail else "未知错误"
+        if file_format in AUDIO_FORMATS and channels == "单声道":
+            # 精简版 ffmpeg 缺少音频重采样时单声道会失败：降级双声道再试一次
+            logger.warning(f"单声道转换失败，降级双声道重试: {reason}")
+            return _ffmpeg_convert(source, target, file_format, "双声道")
+        raise EngineError(f"{file_format} 转换失败：{reason}")
+    return target
+
+
+# =====================================================================
+# 解析
+# =====================================================================
+
+
+def _clean_info(info: dict) -> dict:
+    """从 yt-dlp 的 info dict 提取应用需要的字段"""
+    entries = info.get("entries")
+    if entries:
+        # 播放列表：取第一条作为任务代表（多条目下载由 playlistend 控制）
+        first = next((e for e in entries if e), None)
+        base = dict(info)
+        if first:
+            base.update({k: v for k, v in first.items() if v is not None and k not in base})
+        info = base
+        playlist_count = len(list(info.get("entries") or []))
+    else:
+        playlist_count = 0
+
+    return {
+        "id": str(info.get("id") or ""),
+        "title": str(info.get("title") or info.get("id") or "未命名"),
+        "uploader": str(info.get("uploader") or info.get("channel") or ""),
+        "duration": int(info.get("duration") or 0),
+        "thumbnail": str(info.get("thumbnail") or ""),
+        "webpage_url": str(info.get("webpage_url") or info.get("original_url") or ""),
+        "extractor": str(info.get("extractor_key") or info.get("extractor") or ""),
+        "is_live": bool(info.get("is_live")),
+        "playlist_count": playlist_count,
+    }
+
+
+def probe(url: str, timeout: int = 30) -> dict:
+    """解析链接元数据（不下载）
+
+    Raises:
+        EngineError: 引擎缺失 / 链接不受支持 / 网络错误，带可直接展示的中文原因
+    """
+    _require_engine()
+    YoutubeDL = _load_module().YoutubeDL
+    opts = _base_opts()
+    opts.update({"skip_download": True, "format": None})
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise EngineError(_friendly_error(e)) from e
+    if not info:
+        raise EngineError("该链接没有可下载的内容")
+    result = _clean_info(info)
+    logger.info(
+        f"[引擎] 解析成功: {result['extractor']} | {result['title']}"
+        f" | {result['duration']}s"
+    )
+    return result
+
+
+def resolve_stream(url: str, prefer: str = "worst") -> dict:
+    """解析一条可直接播放的直链（预览用）+ 请求头
+
+    Args:
+        prefer: yt-dlp 格式选择器，默认最低画质（省流量、起播快）
+
+    Returns:
+        {url, headers, title, duration, thumbnail, extractor}
+    """
+    _require_engine()
+    YoutubeDL = _load_module().YoutubeDL
+    opts = _base_opts()
+    opts.update({
+        "skip_download": True,
+        # 优先「音视频合一」的低清流：Qt 播放器不处理分离轨
+        "format": f"{prefer}[acodec!=none][vcodec!=none]/{prefer}/worst",
+    })
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        raise EngineError("该链接没有可预览的流")
+    entries = info.get("entries")
+    if entries:
+        info = next((e for e in entries if e), None) or info
+    stream_url = info.get("url") or ""
+    if not stream_url:
+        # 少数提取器把直链放在 formats 里
+        formats = info.get("formats") or []
+        if formats:
+            stream_url = formats[-1].get("url") or ""
+    if not stream_url:
+        raise EngineError("该站点未提供可直接播放的流（可下载完成后本地预览）")
+    return {
+        "url": stream_url,
+        "headers": dict(info.get("http_headers") or {}),
+        "title": str(info.get("title") or ""),
+        "duration": int(info.get("duration") or 0),
+        "thumbnail": str(info.get("thumbnail") or ""),
+        "extractor": str(info.get("extractor_key") or ""),
+    }
+
+
+# =====================================================================
+# 下载
+# =====================================================================
+
+
+def download(
+    url: str,
+    *,
+    quality: str = DEFAULT_QUALITY,
+    file_format: str = "mp4",
+    out_dir: str,
+    temp_dir: str,
+    channels: str = "双声道",
+    progress_hook: Optional[Callable[[dict], None]] = None,
+    postprocessor_hook: Optional[Callable[[dict], None]] = None,
+) -> dict:
+    """下载并后处理，返回 {filepath, title, extractor, duration, bytes}
+
+    progress_hook 收到 yt-dlp 原始进度 dict（status: downloading/finished/error），
+    字段含义见 yt-dlp 文档：downloaded_bytes / total_bytes / speed / eta。
+    """
+    _require_engine()
+    YoutubeDL = _load_module().YoutubeDL
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(temp_dir)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
+    opts = _base_opts(
+        progress_hooks=[progress_hook] if progress_hook else None,
+        postprocessor_hooks=[postprocessor_hook] if postprocessor_hook else None,
+    )
+    opts.update({
+        "format": format_selector(quality, file_format),
+        # outtmpl 用相对模板 + paths.home 指定输出目录：这样 paths.temp 才会生效
+        # （绝对路径写进 outtmpl 时 yt-dlp 会忽略 --paths，分片会落在输出目录）
+        "outtmpl": {"default": "%(title)s [%(id)s].%(ext)s"},
+        "paths": {"home": str(out_path), "temp": str(tmp_path)},
+    })
+    if file_format == "mp4":
+        opts["merge_output_format"] = "mp4"
+    elif file_format == "mkv":
+        opts["merge_output_format"] = "mkv"
+    # flv / 纯音频（mp3、wav）由本地 ffmpeg 二次处理，不走 yt-dlp 后处理器
+
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filepath = _final_filepath(ydl, info, out_path)
+    except Exception as e:
+        if isinstance(e, EngineError):
+            raise
+        raise EngineError(_friendly_error(e)) from e
+
+    if not filepath:
+        raise EngineError("下载完成但未找到输出文件（可能被站点拦截或需登录）")
+
+    final = Path(filepath)
+    if file_format in AUDIO_FORMATS or file_format == "flv":
+        if postprocessor_hook:
+            postprocessor_hook({"status": "started"})
+        target = final.with_suffix(f".{file_format}")
+        if target.name != final.name:
+            logger.info(f"[引擎] 转换输出: {final.name} -> {target.name}")
+            _ffmpeg_convert(final, target, file_format, channels)
+            try:
+                final.unlink(missing_ok=True)
+            except Exception:
+                pass
+            final = target
+        if postprocessor_hook:
+            postprocessor_hook({"status": "finished"})
+
+    meta = _clean_info(info or {})
+    size = 0
+    try:
+        size = final.stat().st_size
+    except Exception:
+        pass
+    logger.success(f"[引擎] 下载完成: {final}")
+    return {
+        "filepath": str(final),
+        "title": meta["title"],
+        "extractor": meta["extractor"],
+        "duration": meta["duration"],
+        "bytes": size,
+    }
+
+
+def _final_filepath(ydl, info: dict, out_dir: Path) -> str:
+    """取后处理完成后的最终文件路径（合并/转码会改写扩展名）"""
+    if not info:
+        return ""
+    requested = info.get("requested_downloads") or []
+    if requested:
+        path = requested[0].get("filepath") or requested[0].get("_filename")
+        if path and Path(path).exists():
+            return str(path)
+    try:
+        guess = ydl.prepare_filename(info)
+        if guess and Path(guess).exists():
+            return str(guess)
+    except Exception:
+        pass
+    # 兜底：按 [id] 找同目录最新文件
+    vid = str(info.get("id") or "")
+    if vid:
+        candidates = [p for p in out_dir.glob(f"*[{vid}]*") if p.is_file()]
+        if candidates:
+            return str(max(candidates, key=lambda p: p.stat().st_mtime))
+    return ""
+
+
+# =====================================================================
+# 错误与维护
+# =====================================================================
+
+
+def _require_engine() -> None:
+    if not available():
+        raise EngineError(
+            "未找到 yt-dlp 下载引擎，请重新安装应用或在设置中修复引擎依赖"
+        )
+
+
+_UNSUPPORTED_HINTS = (
+    ("Unsupported URL", "该链接暂不被支持（yt-dlp 无法识别该站点）"),
+    ("is not a valid URL", "链接格式不正确，请粘贴完整网址"),
+    ("Video unavailable", "视频不可用（可能已删除、私有或地区限制）"),
+    ("Private video", "该视频为私享/会员内容，需要在设置中配置浏览器 Cookie"),
+    ("Sign in to confirm", "站点要求登录验证，请在设置中导入浏览器 Cookie"),
+    ("This video is available to this channel's members", "会员专属内容，需配置 Cookie"),
+    ("HTTP Error 403", "站点拒绝访问（403），请在设置中导入浏览器 Cookie 或更换代理"),
+    ("HTTP Error 404", "资源不存在（404）"),
+    ("HTTP Error 412", "站点风控拦截（412），请配置 Cookie 后重试"),
+    ("timed out", "网络超时，请检查网络或代理设置"),
+    ("UNEXPECTED_EOF_WHILE_READING", "网络连接被中断（TLS 握手失败），请检查网络或代理设置"),
+    ("Connection reset", "网络连接被重置，请检查网络或代理设置"),
+    ("Failed to resolve", "域名解析失败，请检查 DNS 或代理设置"),
+    ("getaddrinfo failed", "域名解析失败，请检查 DNS 或代理设置"),
+    ("Unable to download webpage", "无法访问该网页，请检查网络/代理，或该站点需要登录 Cookie"),
+    ("Failed to decrypt", "媒体流解密失败，请尝试更新下载引擎"),
+    ("Requested format is not available", "该站点没有符合所选画质的格式，已尝试降级"),
+)
+
+
+def _friendly_error(exc: Exception) -> str:
+    """把 yt-dlp 的长串异常翻译成一句人话"""
+    text = str(exc)
+    # yt-dlp 的 DownloadError 形如 "ERROR: [extractor] 原因"
+    text = re.sub(r"^ERROR:\s*", "", text).strip()
+    for needle, friendly in _UNSUPPORTED_HINTS:
+        if needle.lower() in text.lower():
+            return friendly
+    # 去掉提取器前缀，保留具体原因
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    text = text.split("\n")[0]
+    return text[:200] or "下载失败"
+
+
+def update_engine(progress_cb: Optional[Callable[[str], None]] = None) -> tuple[bool, str]:
+    """通过 pip 升级 yt-dlp（冻结版应用内不可用，返回可读原因）"""
+    if getattr(sys, "frozen", False):
+        return False, "打包版本请通过重新安装应用更新引擎"
+    cmd = [sys.executable, "-m", "pip", "install", "-U", "--disable-pip-version-check", "yt-dlp"]
+    if progress_cb:
+        progress_cb("正在更新下载引擎…")
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        return False, f"更新失败: {e}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["未知错误"]
+        return False, f"更新失败: {tail[0]}"
+    # 版本缓存失效，后续重新读取
+    global _version_cache
+    _version_cache = None
+    return True, version() or "已更新"
+
+

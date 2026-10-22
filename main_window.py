@@ -8,28 +8,29 @@
 """
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve, QEvent, QPointF, QPropertyAnimation, QParallelAnimationGroup,
     Property, Qt, QTimer, QRect, QRectF, QPoint, QSize,
 )
 from PySide6.QtGui import (
-    QColor, QCloseEvent, QGuiApplication, QIcon, QLinearGradient, QPainter,
-    QPainterPath, QPen, QPixmap, QCursor, QTransform,
+    QColor, QCloseEvent, QGuiApplication, QIcon, QPainter,
+    QPen, QPixmap, QCursor, QTransform, QRegion,
 )
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
     QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
-from core_status import get_core_status, update_core_status
+import jiudown_engine
 from download_manager import download_manager
 from pages.download_page import DownloadPage
 from pages.settings_page import SettingsPage
 from theme import APP_TITLE, APP_VERSION, C
 
 NAV_ITEMS = [
-    ("视频下载", "B站视频下载与任务管理", DownloadPage),
+    ("视频下载", "任意站点视频下载与任务管理", DownloadPage),
     ("设置", "状态总览、运行日志与应用配置", SettingsPage),
 ]
 
@@ -60,171 +61,64 @@ _CAPTION_TOOLTIPS = {
 
 
 # =====================================================================
-# 图标系统（iPhone 设计美学）
-# 规范参考 SF Symbols / iOS 应用图标：
-# - 容器：squircle 连续圆角（角部曲线贴边起点与直边切线一致，
-#   无圆弧的曲率突变折痕；对角方向比圆弧更饱满）
-#   + 同色系微渐变（顶亮底暗，iOS 图标的 subtle depth）
-# - 图形：45° 折线、圆头/圆角笔触、统一笔触重量（≈1.9px @20px），
-#   字形外框约 21px（占 48 画布的 44%），四周留白均匀
-# - 选中态导航图标仅绘白色图形（直接位于主色 pill 上，避免同色相叠）
+# 应用图标（resources/app.ico）
+# 设计语言：苹果蓝渐变 squircle + 白色下载箭头（arrow.down.to.line）
+# 由 TEMP/make_ico.py 生成：多尺寸（16-256）独立矢量渲染，PNG 条目 ICO
 # =====================================================================
 
-_ICON_CANVAS = 48  # 图标设计稿尺寸，渲染时按目标尺寸整体缩放
+
+def _app_icon_path() -> str:
+    """ico 资源路径（开发期 = 项目根；打包后 = exe 同级）"""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return str(base / "resources" / "app.ico")
 
 
-def _squircle_path(w: float, h: float, radius: float,
-                   samples: int = 24) -> QPainterPath:
-    """iOS 风格 squircle 路径：角部为连续圆角曲线 (R(1-t)^2, R*t^2)
-
-    普通 drawRoundedRect 的圆弧在贴边起点处曲率从 0 突变为 1/R，
-    直边与弧面交界有一道可见折痕；本曲线在起点处切线与直边一致
-    （水平切向），过渡无折痕，且对角方向比圆弧更饱满——这是
-    iPhone 应用图标标志性的连续圆角轮廓。
-    radius 为贴边直段的长度（等效视觉圆角半径）。
-    """
-    corner = [
-        (radius * (1 - t / samples) ** 2, radius * (t / samples) ** 2)
-        for t in range(samples + 1)
-    ]  # (R,0) → (0,R)
-    path = QPainterPath()
-    path.moveTo(radius, 0)
-    path.lineTo(w - radius, 0)
-    for x, y in corner[1:]:              # 右上角 → (w, R)
-        path.lineTo(w - x, y)
-    path.lineTo(w, h - radius)
-    for x, y in reversed(corner[:-1]):   # 右下角 → (w-R, h)
-        path.lineTo(w - x, h - y)
-    path.lineTo(radius, h)
-    for x, y in corner[1:]:              # 左下角 → (0, h-R)
-        path.lineTo(x, h - y)
-    path.lineTo(0, radius)
-    for x, y in reversed(corner[:-1]):   # 左上角 → (R, 0)
-        path.lineTo(x, y)
-    path.closeSubpath()
-    return path
+_APP_ICON: QIcon | None = None
 
 
-def _paint_icon_tile(p: QPainter, size: float) -> None:
-    """squircle 容器 + 品牌青微渐变（顶 #4DCBC2 → 底 #32ADA5，中点即 #39C5BB）"""
-    grad = QLinearGradient(0, 0, 0, size)
-    grad.setColorAt(0.0, QColor("#4DCBC2"))
-    grad.setColorAt(1.0, QColor("#32ADA5"))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(grad)
-    inset = size * 0.021  # 1px @48：给抗锯齿留边，避免边缘锯齿
-    p.save()
-    p.translate(inset, inset)
-    p.drawPath(_squircle_path(size - inset * 2, size - inset * 2,
-                              (size - inset * 2) * 0.28))
-    p.restore()
-
-
-def _draw_glyph_download(p: QPainter, color: QColor) -> None:
-    """SF 风格「下载」：45° 箭头 + 竖杆 + 托线（arrow.down.to.line）"""
-    pen = QPen(color, 4.5)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPolyline([QPointF(14, 14), QPointF(24, 24), QPointF(34, 14)])
-    p.drawLine(QPointF(24, 24), QPointF(24, 30))
-    p.drawLine(QPointF(13.5, 34.5), QPointF(34.5, 34.5))
-
-
-def _draw_glyph_gear(p: QPainter, body: QColor, hole: QColor) -> None:
-    """SF 风格「齿轮」：6 齿 + 轮身 + 中心孔（gearshape）"""
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(body)
-    p.drawEllipse(QRectF(13.5, 13.5, 21, 21))            # 轮身 r=10.5
-    for i in range(6):
-        p.save()
-        p.translate(24, 24)
-        p.rotate(i * 60)
-        p.drawRoundedRect(QRectF(-2.3, -15.8, 4.6, 6.2), 2.3, 2.3)  # 齿（轮身外交错）
-        p.restore()
-    p.setBrush(hole)
-    p.drawEllipse(QRectF(19.2, 19.2, 9.6, 9.6))          # 中心孔 r=4.8
-
-
-def _draw_glyph_chevrons(p: QPainter, color: QColor) -> None:
-    """SF 风格双雪佛龙（«/»，侧边栏折叠语义）"""
-    pen = QPen(color, 4.0)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPolyline([QPointF(20, 16), QPointF(12, 24), QPointF(20, 32)])
-    p.drawPolyline([QPointF(28, 16), QPointF(36, 24), QPointF(28, 32)])
-
-
-def _render_icon(size: int, draw) -> QPixmap:
-    """把 48 设计稿渲染到任意尺寸（painter 整体缩放，笔触同比缩放）"""
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.scale(size / _ICON_CANVAS, size / _ICON_CANVAS)
-    draw(p)
-    p.end()
-    return pm
-
-
-def _make_app_icon_pixmap(size: int = 64) -> QPixmap:
-    """应用图标（标题栏 / 系统托盘）：squircle + SF 下载图形"""
-    def draw(p: QPainter) -> None:
-        _paint_icon_tile(p, _ICON_CANVAS)
-        _draw_glyph_download(p, QColor("#ffffff"))
-    return _render_icon(size, draw)
-
-
-_NAV_ICON_CACHE: dict[tuple[str, bool], QIcon] = {}
-
-
-def _nav_icon(kind: str, on_brand: bool = False) -> QIcon:
-    """导航图标（带缓存）
-
-    on_brand=False：squircle 渐变底 + 白色图形（未选中，位于深色侧边栏上）
-    on_brand=True ：仅白色图形（选中态，直接位于主色 pill 上）
-    """
-    key = (kind, on_brand)
-    icon = _NAV_ICON_CACHE.get(key)
-    if icon is None:
-        def draw(p: QPainter) -> None:
-            if not on_brand:
-                _paint_icon_tile(p, _ICON_CANVAS)
-            if kind == "download":
-                _draw_glyph_download(p, QColor("#ffffff"))
-            else:
-                # 齿轮孔露出底色：未选中=渐变中点青，选中=pill 主色青
-                hole = QColor("#39C5BB") if on_brand else QColor("#3FBEB5")
-                _draw_glyph_gear(p, QColor("#ffffff"), hole)
-        icon = QIcon(_render_icon(_ICON_CANVAS, draw))
-        _NAV_ICON_CACHE[key] = icon
-    return icon
-
-
-def _make_fold_base_pixmap() -> QPixmap:
-    """折叠开关基础位图（« 展开态；收起态 » 由 180° 旋转动画得到）"""
-    def draw(p: QPainter) -> None:
-        _paint_icon_tile(p, _ICON_CANVAS)
-        _draw_glyph_chevrons(p, QColor("#ffffff"))
-    return _render_icon(_ICON_CANVAS, draw)
+def _app_icon() -> QIcon:
+    """应用图标（窗口 / 标题栏 / 托盘共用，读自 resources/app.ico）"""
+    global _APP_ICON
+    if _APP_ICON is None:
+        _APP_ICON = QIcon(_app_icon_path())
+    return _APP_ICON
 
 
 class _FoldButton(QPushButton):
-    """侧边栏折叠开关：« / » 两态之间以 180° 旋转动画平滑过渡
+    """侧边栏折叠开关：单色细线双雪佛龙（«/»）+ 180° 旋转动画平滑过渡
 
-    图标绕画布中心旋转（QTransform 中心平移），每帧重绘并 setIcon，
-    按钮自身的 QSS 样式不受影响。
+    无容器底、颜色随主题（sidebar_text）；« 展开态，收起态 » 由旋转得到。
+    图标绕画布中心旋转（QTransform 中心平移），每帧重绘并 setIcon。
     """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._angle = 0.0
-        self._base_pm = _make_fold_base_pixmap()
+        self._base_pm = self._make_base_pixmap()
         self.setIconSize(QSize(20, 20))
         self._apply_angle(0.0)
+
+    def _make_base_pixmap(self) -> QPixmap:
+        pm = QPixmap(48, 48)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(C["sidebar_text"]), 4.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPolyline([QPointF(20, 16), QPointF(12, 24), QPointF(20, 32)])
+        p.drawPolyline([QPointF(28, 16), QPointF(36, 24), QPointF(28, 32)])
+        p.end()
+        return pm
+
+    def refresh_theme(self) -> None:
+        self._base_pm = self._make_base_pixmap()
+        self._apply_angle(self._angle)
 
     def _apply_angle(self, angle: float) -> None:
         transform = QTransform()
@@ -245,11 +139,13 @@ class _FoldButton(QPushButton):
     angle = Property(float, _get_angle, _set_angle)
 
 
+# macOS 红绿灯配色（图标化圆点，不随主题改色，属苹果标志性视觉）
 class _CaptionButton(QPushButton):
-    """一体化标题栏的窗口控制按钮（最小化 / 最大化 / 还原 / 关闭）
+    """标题栏 Windows 风格窗口控制按钮（最小化 / 最大化·还原 / 关闭）
 
-    自绘图标与状态底色，颜色取自主题令牌（C 实时视图），主题切换自动跟随。
-    尺寸遵循 Windows  caption 按钮惯例（46 x 标题栏高）。
+    线性字形（— / □ / ⧉ / ×）居中绘制，颜色取自主题令牌；
+    悬停灰底、按下深灰底；关闭按钮悬停红底白叉（Windows 惯例）。
+    尺寸 46 x 标题栏高（Windows caption 按钮惯例）。
     """
 
     def __init__(self, role: str, parent: QWidget | None = None):
@@ -271,7 +167,7 @@ class _CaptionButton(QPushButton):
         self.update()
 
     def _state_bg(self):
-        """当前状态底色；None = 透明（透出右段背景）"""
+        """当前状态底色；None = 透明（透出标题栏背景）"""
         if self._role == "close":
             if self.isDown():
                 return QColor(C["titlebar_close_pressed"])
@@ -284,8 +180,16 @@ class _CaptionButton(QPushButton):
             return QColor(C["titlebar_ctrl_hover"])
         return None
 
-    def _paint_icon(self, p: QPainter, color: QColor, bg) -> None:
-        cx, cy = int(self.width() / 2), int(self.height() / 2)
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = self._state_bg()
+        if bg is not None:
+            p.fillRect(self.rect(), bg)
+        cx, cy = self.width() / 2, self.height() / 2
+        is_close = self._role == "close"
+        color = QColor("#ffffff") if (is_close and self.underMouse()) \
+            else QColor(C["titlebar_icon"])
         pen = QPen(color, 1.2)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -294,28 +198,16 @@ class _CaptionButton(QPushButton):
         if self._role == "minimize":
             p.drawLine(QPointF(cx - 5, cy), QPointF(cx + 5, cy))
         elif self._role == "maximize":
-            p.drawRect(QRect(cx - 5, cy - 5, 10, 10))
+            p.drawRect(QRectF(cx - 4.5, cy - 4.5, 9, 9))
         elif self._role == "restore":
-            # 后窗（右上偏移）+ 前窗（当前底色填充，形成遮挡关系）
-            p.drawRect(QRect(cx - 3, cy - 5, 10, 10))
-            p.setBrush(QColor(bg) if bg is not None else QColor(C["bg"]))
-            p.drawRect(QRect(cx - 5, cy - 3, 10, 10))
+            # 后窗（右上偏移）+ 前窗（以底色填充形成遮挡关系）
+            p.drawRect(QRectF(cx - 2.5, cy - 4.5, 9, 9))
+            if bg is not None:
+                p.setBrush(bg)
+            p.drawRect(QRectF(cx - 4.5, cy - 2.5, 9, 9))
         else:  # close
-            p.drawLine(QPointF(cx - 5, cy - 5), QPointF(cx + 5, cy + 5))
-            p.drawLine(QPointF(cx + 5, cy - 5), QPointF(cx - 5, cy + 5))
-
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bg = self._state_bg()
-        if bg is not None:
-            p.fillRect(self.rect(), bg)
-        elif self._role == "restore":
-            # 还原图标的"后窗"需要底色遮挡，避免线条穿帮
-            p.fillRect(self.rect(), QColor(C["bg"]))
-        hover_close = self._role == "close" and self.underMouse()
-        icon_color = QColor("#ffffff") if hover_close else QColor(C["titlebar_icon"])
-        self._paint_icon(p, icon_color, bg)
+            p.drawLine(QPointF(cx - 4.5, cy - 4.5), QPointF(cx + 4.5, cy + 4.5))
+            p.drawLine(QPointF(cx + 4.5, cy - 4.5), QPointF(cx - 4.5, cy + 4.5))
         p.end()
 
 
@@ -340,25 +232,19 @@ class _TitleBar(QWidget):
         self._left = QWidget()
         self._left.setObjectName("titleBarLeft")
         self._left_lay = QHBoxLayout(self._left)
-        # 左边距 24：图标中心落在 x=32，与侧边栏开关/导航图标线对齐；
+        # 左边距 24：图标中心落在 x=32，与侧边栏开关/导航内容线对齐；
         # 收起态（64px 段）下 24+16/2 也恰好居中于 32，两态图标零位移
         self._left_lay.setContentsMargins(24, 0, 10, 0)
         self._left_lay.setSpacing(8)
         self._icon_label = QLabel()
-        self._icon_label.setPixmap(
-            _make_app_icon_pixmap(32).scaled(
-                16, 16,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self._icon_label.setPixmap(_app_icon().pixmap(16, 16))
         self._title_label = QLabel(APP_TITLE)
         self._title_label.setObjectName("titlebarTitle")
         self._left_lay.addWidget(self._icon_label)
         self._left_lay.addWidget(self._title_label)
         self._left_lay.addStretch()
 
-        # ---- 右段：窗口控制 ----
+        # ---- 右段：窗口控制（Windows 惯例，右端排列、紧贴窗口右缘） ----
         self._right = QWidget()
         self._right.setObjectName("titleBarRight")
         right_lay = QHBoxLayout(self._right)
@@ -429,6 +315,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
+        self.setWindowIcon(_app_icon())
         self.resize(1280, 800)
         self.setMinimumSize(1060, 680)
         # 启动即把尺寸收敛到当前屏幕工作区：高 DPI 小屏（如 150% 缩放的 1080p）
@@ -478,7 +365,7 @@ class MainWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         tray = QSystemTrayIcon(self)
-        tray.setIcon(QIcon(_make_app_icon_pixmap(64)))
+        tray.setIcon(_app_icon())
         tray.setToolTip(APP_TITLE)
         menu = QMenu(self)
         show_action = menu.addAction("显示主窗口")
@@ -560,8 +447,8 @@ class MainWindow(QMainWindow):
         sidebar.setMaximumWidth(SIDEBAR_WIDE)
         self._sidebar = sidebar
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(14, 22, 14, 16)
-        side_layout.setSpacing(4)
+        side_layout.setContentsMargins(16, 24, 16, 18)
+        side_layout.setSpacing(6)
 
         logo_row = QHBoxLayout()
         logo_row.setSpacing(10)
@@ -581,7 +468,7 @@ class MainWindow(QMainWindow):
         brand_lay.setSpacing(0)
         title_label = QLabel(APP_TITLE)
         title_label.setObjectName("sidebarTitle")
-        sub_label = QLabel("B站视频下载工具")
+        sub_label = QLabel("全站视频下载工具")
         sub_label.setObjectName("sidebarSub")
         brand_lay.addWidget(title_label)
         brand_lay.addWidget(sub_label)
@@ -599,8 +486,6 @@ class MainWindow(QMainWindow):
             button.setProperty("navText", name)
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setIcon(_nav_icon("download" if index == 0 else "settings"))
-            button.setIconSize(QSize(20, 20))
             button.clicked.connect(
                 lambda _checked=False, i=index: self._switch_page(i)
             )
@@ -635,8 +520,8 @@ class MainWindow(QMainWindow):
         # ---- 右侧内容区 ----
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(28, 14, 28, 16)
-        content_layout.setSpacing(10)
+        content_layout.setContentsMargins(32, 18, 32, 22)
+        content_layout.setSpacing(12)
 
         header_row = QHBoxLayout()
         header_row.setSpacing(12)
@@ -648,7 +533,7 @@ class MainWindow(QMainWindow):
         self._page_subtitle_label.setObjectName("pageSubtitle")
         header_text.addWidget(self._page_title_label)
         header_text.addWidget(self._page_subtitle_label)
-        self._status_pill = QLabel("核心: 检测中")
+        self._status_pill = QLabel("引擎: 检测中")
         self._status_pill.setObjectName("statusPill")
         header_row.addLayout(header_text)
         header_row.addStretch()
@@ -715,7 +600,8 @@ class MainWindow(QMainWindow):
         self._version_label.setVisible(not collapsed)
         for button in self._nav_buttons:
             text = button.property("navText") or ""
-            button.setText("" if collapsed else text)
+            # 收起态以导航名首字占位（纯文字侧边栏，无图标）
+            button.setText(text[:1] if collapsed else text)
             button.setToolTip(text if collapsed else "")
             button.setProperty("collapsed", collapsed)
             button.style().unpolish(button)
@@ -723,29 +609,26 @@ class MainWindow(QMainWindow):
 
     def _switch_page(self, index: int) -> None:
         for i, button in enumerate(self._nav_buttons):
-            selected = i == index
-            button.setChecked(selected)
-            # 选中态图标换为「仅白色图形」变体：直接位于主色 pill 上，避免同色相叠
-            button.setIcon(
-                _nav_icon("download" if i == 0 else "settings", on_brand=selected)
-            )
+            button.setChecked(i == index)
         self._stack.setCurrentIndex(index)
         name, desc, _cls = NAV_ITEMS[index]
         self._page_title_label.setText(name)
         self._page_subtitle_label.setText(desc)
 
     def _refresh_status_pill(self) -> None:
-        update_core_status()
-        running = get_core_status().get("is_running", False)
-        if running:
-            text, bg, fg = "● 核心运行中", C["green_bg"], C["green_dark"]
+        """状态胶囊：活跃下载数 + 引擎后端就绪情况"""
+        active = len(download_manager._active)
+        info = jiudown_engine.engine.info()
+        if active:
+            text, css_class = f"● 下载中 {active}", "badgeBlue"
+        elif not info["ytdlp_ready"]:
+            text, css_class = "● 部分就绪", "badgeOrange"
         else:
-            text, bg, fg = "● 核心已停止", C["red_bg"], C["red_dark"]
+            text, css_class = "● 就绪", "badgeGreen"
         self._status_pill.setText(text)
-        self._status_pill.setStyleSheet(
-            f"background: {bg}; color: {fg}; border-radius: 12px;"
-            f"padding: 5px 14px; font-size: 12px; font-weight: 600;"
-        )
+        self._status_pill.setProperty("cssClass", css_class)
+        self._status_pill.style().unpolish(self._status_pill)
+        self._status_pill.style().polish(self._status_pill)
 
     # ---------------------------------------------------------------- 无边框窗口行为
 
@@ -913,6 +796,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._track_normal_geometry()
+        self._apply_window_mask()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
@@ -940,6 +824,7 @@ class MainWindow(QMainWindow):
         if not self._shadow_done:
             self._shadow_done = True
             self._enable_native_shadow()
+        self._apply_window_mask()
 
     def _fit_to_screen(self, screen=None) -> None:
         """把初始尺寸与最小尺寸收敛到当前屏幕工作区，并居中放置
@@ -991,6 +876,32 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass  # 老系统 / 关闭 DWM 合成时静默降级：仅失去阴影
+
+    def _apply_window_mask(self) -> None:
+        """无边框窗口的苹果式圆角遮罩：裁掉四角，露出窗外阴影/桌面。
+
+        最大化（含系统原生与自定义）时整窗贴合工作区，圆角无意义且会露缝，
+        直接清除遮罩恢复矩形。
+        """
+        if self._is_maximized or self.isMaximized():
+            self.clearMask()
+            return
+        r = 11
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        region = QRegion(QRect(r, 0, w - 2 * r, h))            # 中部（去两竖边角）
+        region += QRegion(QRect(0, r, w, h - 2 * r))            # 中部（去两横边角）
+        # 四角：r×r 方块 ∩ 2r×2r 椭圆 = 四分圆
+        region += QRegion(QRect(0, 0, r, r)) & QRegion(
+            QRect(0, 0, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
+        region += QRegion(QRect(w - r, 0, r, r)) & QRegion(
+            QRect(w - 2 * r, 0, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
+        region += QRegion(QRect(0, h - r, r, r)) & QRegion(
+            QRect(0, h - 2 * r, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
+        region += QRegion(QRect(w - r, h - r, r, r)) & QRegion(
+            QRect(w - 2 * r, h - 2 * r, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
+        self.setMask(region)
 
     def refresh_theme(self) -> None:
         """主题切换回调：重放内联动态颜色（状态徽章 + 标题栏控制按钮）"""
