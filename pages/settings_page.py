@@ -166,6 +166,25 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
+        # 外观设置卡片
+        card, card_vbox = self._section_card("外观设置", "切换应用主题风格")
+        from theme import theme_manager, MODE_SYSTEM, MODE_LIGHT, MODE_DARK, MODE_LABELS
+        self.theme_mode = QComboBox()
+        self.theme_mode.addItem(MODE_LABELS[MODE_SYSTEM], MODE_SYSTEM)
+        self.theme_mode.addItem(MODE_LABELS[MODE_LIGHT], MODE_LIGHT)
+        self.theme_mode.addItem(MODE_LABELS[MODE_DARK], MODE_DARK)
+        # 设置当前选中项
+        current_mode = theme_manager.mode
+        for i in range(self.theme_mode.count()):
+            if self.theme_mode.itemData(i) == current_mode:
+                self.theme_mode.setCurrentIndex(i)
+                break
+        self.theme_mode.currentIndexChanged.connect(self._on_theme_mode_changed)
+        row = self._form_row("主题模式", self.theme_mode)
+        row.addStretch()
+        card_vbox.addLayout(row)
+        vbox.addWidget(card)
+
         card, card_vbox = self._section_card("日志设置")
         self.log_level = QComboBox()
         self.log_level.addItems(LOG_LEVELS)
@@ -553,6 +572,12 @@ class SettingsPage(QWidget):
                 "hide-nickname": self.hide_nickname.isChecked(),
             },
         }
+
+    def _on_theme_mode_changed(self, index: int) -> None:
+        """主题模式切换回调"""
+        from theme import theme_manager
+        mode = self.theme_mode.itemData(index)
+        theme_manager.set_mode(mode, persist=True)
 
     def _save_settings(self) -> None:
         try:

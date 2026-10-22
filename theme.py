@@ -1,16 +1,15 @@
 """
 全局主题模块（双主题架构）
-视觉风格参考自玖桐博客（Miku 青 #39C5BB 系）：
-淡青背景、白色卡片、14px 大圆角、青色主色、胶囊标签、柔和层次
+视觉风格参考自 Qoder 应用设计：
+- 现代简洁的卡片式布局
+- 低饱和度配色 + Miku 青品牌色
+- 圆角 8-12px，柔和阴影
+- 双主题可切换（深色/浅色）
 
 架构说明：
-- light：原始配色，逐值保留（与重构前完全一致，不改动任何一个色值）
-- dark：同色系派生的深色主题。深色不是把浅色反过来——
-  背景不用纯黑（用带青调的深色）、层级靠表面抬升、主色提亮、文字不用纯白
-- 所有颜色集中在 THEMES 令牌表；QSS 由 build_qss() 按主题生成，组件零硬编码
-- **产品决策（2026-10-16）：固定浅色主题**。不再跟随系统配色，也不提供切换入口
-  （此前"跟随系统"在系统深色下会把界面变成深色，与产品定位的浅色风格冲突）。
-  set_mode / start_system_follow 等能力保留，后续如需恢复切换只需改 load_mode()
+- light/dark 两个主题使用完全相同的键名
+- 所有颜色集中在 THEMES 令牌表；QSS 由 build_qss() 按主题生成
+- ThemeManager 单例管理主题切换，持久化用户选择
 """
 
 import json
@@ -619,18 +618,17 @@ def _prefs_path():
 
 
 def load_mode() -> str:
-    """读取主题模式：固定浅色（产品决策，见模块 docstring）
-
-    历史版本曾把主题偏好持久化到 config/ui_prefs.json；该文件不再读取，
-    顺手清理，避免残留文件造成"为什么设置了不生效"的困惑。
-    """
+    """读取主题模式：从持久化配置加载，默认跟随系统"""
     try:
         path = _prefs_path()
         if path.exists():
-            path.unlink()
+            data = json.loads(path.read_text(encoding="utf-8"))
+            mode = data.get("theme_mode", MODE_SYSTEM)
+            if mode in MODES:
+                return mode
     except Exception:
         pass
-    return MODE_LIGHT
+    return MODE_SYSTEM
 
 
 def save_mode(mode: str) -> None:

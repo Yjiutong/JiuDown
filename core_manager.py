@@ -175,10 +175,15 @@ class CoreManager:
             return None
     
     def _resolve_resources_path(self, resources_path: Optional[str] = None) -> Path:
-        """解析核心文件目录，未指定时使用程序默认目录"""
-        if resources_path is None:
-            resources_path = system_info.get_default_paths()['resources_dir']
-        return Path(resources_path).resolve()
+        """解析核心文件目录，优先使用 runtime/ 目录，未指定时使用程序默认目录"""
+        if resources_path is not None:
+            return Path(resources_path).resolve()
+        # 优先使用 runtime 目录
+        base_dir = system_info._get_runtime_base_dir()
+        runtime_dir = base_dir / 'runtime'
+        if runtime_dir.exists():
+            return runtime_dir.resolve()
+        return Path(system_info.get_default_paths()['resources_dir']).resolve()
     
     def check_core_hash(self, resources_path: Optional[str] = None) -> dict:
         """检查核心文件的hash值是否匹配"""

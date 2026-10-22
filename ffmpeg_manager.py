@@ -1,18 +1,14 @@
 """
 FFmpeg 环境管理（完整版自动升级）
 
-仓库随包分发的是精简版 ffmpeg.exe（约 0.8MB：仅 mov 解封装、mp4/mp3 封装、
-libmp3lame 编码），功能受限——无法输出 flv / wav，单声道重采样不可用。
+仓库不再跟踪 ffmpeg.exe（已加入 .gitignore），本地保留完整版二进制。
+新 clone 用户首次启动时自动下载完整版；已有本地副本则直接使用。
 
 启动时探测当前 ffmpeg 的能力：
 - 完整版   → 无事
-- 精简版   → 后台自动下载完整版 → 提取 → 校验能力 → 原子替换精简版
-             （目标被下载任务占用时退避重试；仍失败则暂存
-              ffmpeg-full.exe，由下次启动补替换）
-- 缺失     → 直接拉取完整版
-
-替换成功后对该文件打 git skip-worktree，避免完整版二进制被误提交入库
-（仓库中只保留精简版基线，可用 git update-index --no-skip-worktree 恢复）。
+- 精简版/缺失 → 后台自动下载完整版 → 提取 → 校验能力 → 原子替换到目标路径
+               （目标被占用时退避重试；仍失败则暂存 ffmpeg-full.exe，
+                由下次启动补替换）
 
 UI 侧通过 format_supported() / mono_supported() 禁用当前 ffmpeg 做不到的
 选项；完整版就绪后经 capabilities_changed 信号重新门控。
@@ -22,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -88,7 +85,15 @@ _cap_lock = threading.Lock()
 # ---------------------------------------------------------------- 公共 API
 
 def get_ffmpeg_path() -> str:
-    """应用使用的 FFmpeg 路径（可能不存在）"""
+    """应用使用的 FFmpeg 路径（优先 runtime/ffmpeg.exe，其次 config 配置）"""
+    # 优先使用 runtime 目录下的 ffmpeg
+    from pathlib import Path
+    base_dir = Path(__file__).resolve().parent
+    if getattr(sys, 'frozen', False):
+        base_dir = Path(sys.executable).resolve().parent
+    runtime_ffmpeg = base_dir / 'runtime' / 'ffmpeg.exe'
+    if runtime_ffmpeg.exists():
+        return str(runtime_ffmpeg)
     return config_manager.get_ffmpeg_path()
 
 
@@ -303,7 +308,6 @@ def _install(src: Path, target: Path) -> None:
     for attempt in range(45):
         try:
             os.replace(src, target)
-            _mark_skip_worktree(target)
             return
         except PermissionError:
             if attempt == 0:
@@ -324,35 +328,11 @@ def _apply_pending() -> None:
         return
     try:
         os.replace(pending, target)
-        _mark_skip_worktree(target)
         logger.success(f"已应用遗留的完整版 FFmpeg: {target}")
     except PermissionError:
         logger.info("ffmpeg.exe 占用中，遗留完整版将在下次启动应用")
     except Exception as e:
         logger.warning(f"应用遗留完整版失败: {e}")
-
-
-def _mark_skip_worktree(target: Path) -> None:
-    """完整版替换了仓库内的精简版后，让 git 忽略该文件本地改动，
-    避免几十 MB 的二进制被误提交（仓库只保留精简版基线）。
-    需要恢复跟踪时：git update-index --no-skip-worktree <文件>
-    """
-    try:
-        root = subprocess.run(
-            ["git", "-C", str(target.parent), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=8, creationflags=_NO_WINDOW,
-        )
-        if root.returncode != 0:
-            return
-        repo_root = Path(root.stdout.strip())
-        rel = target.resolve().relative_to(repo_root.resolve()).as_posix()
-        subprocess.run(
-            ["git", "-C", str(repo_root), "update-index", "--skip-worktree", rel],
-            capture_output=True, text=True, timeout=8, creationflags=_NO_WINDOW,
-        )
-        logger.info(f"git 已忽略 {rel} 的本地改动（skip-worktree）")
-    except Exception as e:
-        logger.debug(f"标记 skip-worktree 失败（不影响使用）: {e}")
 
 
 def _download_zip(url: str, dest: Path) -> None:

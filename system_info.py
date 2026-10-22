@@ -97,16 +97,19 @@ class SystemInfo:
         return Path(__file__).resolve().parent
     
     def get_default_paths(self) -> Dict[str, str]:
-        """获取默认路径配置"""
+        """获取默认路径配置（优先使用 runtime/ 目录下的文件）"""
         base_dir = self._get_runtime_base_dir()
         ffmpeg_name = 'ffmpeg.exe' if platform.system() == 'Windows' else 'ffmpeg'
+        # 优先使用 runtime 目录下的 ffmpeg
+        runtime_ffmpeg = base_dir / 'runtime' / ffmpeg_name
+        ffmpeg_path = str(runtime_ffmpeg) if runtime_ffmpeg.exists() else str(base_dir / 'resources' / ffmpeg_name)
         return {
             'temp_dir': str(base_dir / 'TEMP'),
             'download_dir': str(base_dir / 'Download'),
             'config_dir': str(self.get_config_dir()),
             'logs_dir': str(base_dir / 'logs'),
             'resources_dir': str(base_dir / 'resources'),
-            'ffmpeg_path': str(base_dir / 'resources' / ffmpeg_name),
+            'ffmpeg_path': ffmpeg_path,
         }
     
     def get_system_type(self) -> str:

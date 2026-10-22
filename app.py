@@ -12,21 +12,25 @@ import pathlib
 import shutil
 import sys
 
+# 嵌入式 Python 需要手动添加应用根目录到 sys.path
+_app_dir = pathlib.Path(__file__).resolve().parent
+if str(_app_dir) not in sys.path:
+    sys.path.insert(0, str(_app_dir))
+
 from loguru import logger
 
 
 def configure_logger() -> None:
-    """配置 loguru 日志：控制台 + 按天分割的文件日志"""
+    """配置 loguru 日志：仅文件日志（无控制台输出，避免窗口闪现）"""
     logger.remove()
-    # windowed 打包模式下 sys.stderr 为 None（无控制台），需保护
-    if sys.stderr is not None:
-        logger.add(sys.stderr, colorize=True, level="INFO")
+    # 完全移除控制台输出（windowed 模式下 stderr 会导致窗口闪现）
     logger.add(
         "logs/JiuDown_{time:YYYY-MM-DD}.log",
         rotation="1 day",
         retention="7 days",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}",
         level="DEBUG",
+        encoding="utf-8",
     )
 
 
@@ -99,6 +103,16 @@ def main() -> None:
     """主程序入口"""
     configure_logger()
     logger.info("应用启动，开始初始化...")
+
+    # runtime 环境自检：缺失则从 GitHub Release 下载
+    from runtime_manager import ensure_runtime, get_runtime_status
+    status = get_runtime_status()
+    logger.info(f"runtime 状态: complete={status['complete']}, python={status['python_version']}")
+    if not status["complete"]:
+        logger.info("runtime 环境不完整，开始自动下载...")
+        ok = ensure_runtime()
+        if not ok:
+            logger.error("runtime 下载失败，应用可能无法正常运行")
 
     initialize_config()
 
