@@ -3,7 +3,8 @@ Runtime 环境自举管理
 
 启动时自检 runtime/ 目录：
 - 完整 → 直接使用 runtime/python/python.exe 运行
-- 缺失/不完整 → 从 GitHub Release 下载 runtime.zip → 解压 → 校验 → 使用
+- 缺失/不完整 → 用仓库内随附的组件包（build_components/）离线补齐；
+                组件包缺失时才从 GitHub Release 下载
 
 runtime 目录结构：
   runtime/
@@ -11,11 +12,11 @@ runtime 目录结构：
   │   ├── python.exe
   │   ├── python312.dll
   │   └── Lib/site-packages/
-  ├── ffmpeg.exe           完整版 FFmpeg
-  └── JiuDownCore-win64.exe  核心下载进程
+  └── ffmpeg.exe           精简版 FFmpeg（由 ffmpeg_manager 放置）
 """
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -196,16 +197,54 @@ def download_runtime(progress_callback=None) -> bool:
 
 
 # ---------------------------------------------------------------- 组件化安装
-# runtime 被拆成 core / pyside-N / engine / app 若干组件（各自 < 100MB），
-# 发布在 release 的 runtime 标签下，运行端只补缺失或需要更新的组件。
+# runtime 被拆成 core / pyside-N / engine / app 若干组件（各自 < 100MB）。
+# 组件包随仓库一起分发（build_components/），首次安装**离线即可完成**；
+# Release 只是可选的更新镜像：本地包缺失或 sha256 对不上时才去下载。
 
 COMPONENT_ASSET_BASE = RUNTIME_RELEASE_URL.rsplit("/", 1)[0]
 COMPONENT_MANIFEST_URL = f"{COMPONENT_ASSET_BASE}/manifest.json"
 COMPONENT_STATE_FILE = "component_state.json"
+COMPONENT_DIR_NAME = "build_components"
 
 
 def _release_asset_url(filename: str) -> str:
     return f"{COMPONENT_ASSET_BASE}/{filename}"
+
+
+def get_component_dir() -> Path:
+    """仓库内随附的组件目录（离线安装用）
+
+    打包后 build_components 会被 PyInstaller 解到 _MEIPASS，故两处都找。
+    """
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / COMPONENT_DIR_NAME)
+    candidates.append(get_base_dir() / COMPONENT_DIR_NAME)
+    for path in candidates:
+        if (path / "manifest.json").exists():
+            return path
+    return candidates[-1]
+
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def local_component_zip(name: str, meta: dict) -> Path | None:
+    """仓库内是否随附有该组件，且 sha256 与清单一致（不一致视为过期包，仍走下载）"""
+    path = get_component_dir() / (meta.get("file") or f"{name}.zip")
+    if not path.exists():
+        return None
+    expected = (meta.get("sha256") or "").lower()
+    if expected and _sha256_of(path) != expected:
+        logger.warning(f"仓库内组件 {name} 校验不匹配，改用 Release 上的包")
+        return None
+    return path
 
 
 def component_marker_present(group: str) -> bool:
@@ -216,8 +255,31 @@ def component_marker_present(group: str) -> bool:
     return bool(rel) and (get_runtime_dir() / rel).exists()
 
 
-def fetch_component_manifest(timeout: int = 30) -> dict | None:
-    """拉取 release 上的组件清单；拿不到返回 None（调用方回退整包）"""
+def load_local_manifest() -> dict | None:
+    """读取仓库内随附的组件清单（离线安装用）"""
+    path = get_component_dir() / "manifest.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        logger.warning(f"仓库内组件清单无法解析（{path}）：{e}")
+        return None
+    if not isinstance(data.get("components"), dict) or not data["components"]:
+        logger.warning("仓库内组件清单格式不正确，忽略")
+        return None
+    return data
+
+
+def fetch_component_manifest(timeout: int = 30, local_first: bool = True) -> dict | None:
+    """获取组件清单：优先用仓库内随附的那份，拿不到再问 Release
+
+    local_first=False 时强制走网络（用于「检查更新」这类场景）。
+    """
+    if local_first:
+        local = load_local_manifest()
+        if local:
+            return local
     try:
         import requests  # noqa: PLC0415
 
@@ -278,9 +340,14 @@ def install_component_group(group: str, manifest: dict, progress_callback=None) 
         for name, meta in comps.items():
             url = _release_asset_url(meta.get("file") or f"{name}.zip")
             size_mb = (meta.get("size") or 0) / 1024 / 1024
-            logger.info(f"下载组件 {name}（{size_mb:.1f} MB）: {url}")
-            zip_path = tmp_dir / (meta.get("file") or f"{name}.zip")
-            _download_file(url, zip_path, meta.get("sha256", ""), progress_callback)
+            local = local_component_zip(name, meta)
+            if local is not None:
+                logger.info(f"使用仓库内组件 {name}（{size_mb:.1f} MB）: {local}")
+                zip_path = local
+            else:
+                logger.info(f"下载组件 {name}（{size_mb:.1f} MB）: {url}")
+                zip_path = tmp_dir / (meta.get("file") or f"{name}.zip")
+                _download_file(url, zip_path, meta.get("sha256", ""), progress_callback)
             logger.info(f"解压组件 {name} …")
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(runtime_dir)
@@ -317,12 +384,15 @@ def _save_component_state(manifest: dict, installed_group: str) -> None:
 def update_engine_component(progress_callback=None) -> tuple[bool, str]:
     """只更新下载引擎组件（几 MB），不再重下整个运行时
 
+    「更新引擎」要拿的是**最新**的引擎，所以先问 Release；网络不可用时
+    退化到仓库内随附的那份（离线也能修好一个坏掉的引擎）。
+
     Returns:
         (是否成功, 引擎版本或失败原因)
     """
-    manifest = fetch_component_manifest()
+    manifest = fetch_component_manifest(local_first=False) or load_local_manifest()
     if not manifest:
-        return False, "release 上未找到组件清单（manifest.json）"
+        return False, "未找到组件清单（Release 与仓库内都没有 manifest.json）"
     if not install_component_group("engine", manifest, progress_callback):
         return False, "引擎组件下载或校验失败"
     return True, str(manifest.get("engine_version") or "")
@@ -331,8 +401,8 @@ def update_engine_component(progress_callback=None) -> tuple[bool, str]:
 def ensure_runtime(progress_callback=None) -> bool:
     """确保 runtime 环境可用
 
-    优先按组件清单补齐缺失项（增量、每个组件 < 100MB）；
-    清单不可用时回退到整包 runtime.zip（兼容旧发布）。
+    优先按组件清单补齐缺失项（增量、每个组件 < 100MB）。清单默认取仓库内
+    随附的那份，组件 zip 也在仓库里 → 克隆下来断网也能装好。
     """
     if is_runtime_complete():
         return True

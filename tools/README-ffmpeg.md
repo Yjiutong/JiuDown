@@ -109,8 +109,10 @@ with zipfile.ZipFile('build_components/ffmpeg-lite.zip','w',zipfile.ZIP_DEFLATED
 "
 ```
 
-把 `ffmpeg-lite.zip` 上传到 release 的 `runtime` 标签即可，客户端地址见
-`ffmpeg_manager.FFMPEG_LITE_URLS`。
+压包只有 2.3MB，**直接提交进仓库**（`.gitignore` 为 `build_components/*.zip` 开了例外）。
+`ffmpeg_manager.ensure_available()` 会优先用它离线安装，命中就完全不联网；
+只有仓库里没带这份包时才去 `FFMPEG_LITE_URLS`（Release）拉取，
+所以 Release 上那份只是可选镜像，不是必需项。
 
 ## 许可证
 

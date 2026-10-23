@@ -17,8 +17,9 @@ if exist "runtime\python\python.exe" (
 )
 
 echo Installing runtime...
-echo   - preferred: components from GitHub Release ^(~100 MB total^)
-echo   - fallback : full runtime.zip ^(~339 MB^)
+echo   - preferred: bundled components in build_components\ (offline, ~100 MB^)
+echo   - fallback : components from GitHub Release ^(~100 MB^)
+echo   - last     : full runtime.zip ^(~339 MB^)
 echo   Keep this window open; it may take a few minutes.
 echo.
 

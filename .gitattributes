@@ -8,3 +8,7 @@
 *.ico binary
 *.png binary
 *.exe binary
+
+# 组件包随仓库分发：必须按二进制处理，换行转换会直接损坏 zip
+*.zip binary
+manifest.json text eol=lf

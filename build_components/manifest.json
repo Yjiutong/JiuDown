@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "build": "20261023-154610",
+  "engine_version": "2026.10.21",
+  "max_component_bytes": 104857600,
+  "groups": [
+    "core",
+    "pyside",
+    "engine",
+    "app"
+  ],
+  "components": {
+    "app": {
+      "file": "app.zip",
+      "size": 3454689,
+      "sha256": "deb54514e585e52d04f5ac222ad03cb84adcab2f03a05919316757e4a01fd498",
+      "files": 765,
+      "group": "app"
+    },
+    "core": {
+      "file": "core.zip",
+      "size": 13152661,
+      "sha256": "9af454932ea8f6997d9f4a3dbb6b9b44ff82eb6d4d6bbd6e16ea0fdfcac9582c",
+      "files": 82,
+      "group": "core"
+    },
+    "engine": {
+      "file": "engine.zip",
+      "size": 5415249,
+      "sha256": "cc74ab4bae9ba2464b1a415df0a28a966bf39e6b8a1c1a45fe80f1e9d9829de7",
+      "files": 1529,
+      "group": "engine"
+    },
+    "pyside-1": {
+      "file": "pyside-1.zip",
+      "size": 32311897,
+      "sha256": "3b67cda521f71ab9ea2d615be6753ca36e63bbacf5eaaa35f4ba8b9e939e95a7",
+      "files": 163,
+      "group": "pyside"
+    },
+    "pyside-2": {
+      "file": "pyside-2.zip",
+      "size": 32532200,
+      "sha256": "7ce816db34cbfd400a26d81dbdd8a3ab87c646e08b56c8fb5dd04384818d813b",
+      "files": 2818,
+      "group": "pyside"
+    },
+    "pyside-3": {
+      "file": "pyside-3.zip",
+      "size": 18346393,
+      "sha256": "2704568a707b716d42db28282c1a21a22e121ff32ac364452d7d497f0d63a18e",
+      "files": 698,
+      "group": "pyside"
+    }
+  }
+}

@@ -9,7 +9,6 @@
 /.workbuddy/
 
 # ---- 运行时数据与产物 ----
-/build_components/
 /config
 /Download
 /downloads
@@ -20,6 +19,9 @@ __pycache__/
 *.zip
 *.bak
 *.part
+# 例外：组件包随仓库分发（离线即可完成首次安装），单包最大约 32MB，均 < 100MB
+!/build_components/*.zip
+!/build_components/manifest.json
 
 # ---- 二进制依赖（体积大不入库，首次运行自动下载） ----
 # app.ico 例外：打包所需的图标必须入库

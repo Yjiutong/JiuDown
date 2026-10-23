@@ -296,13 +296,55 @@ def prepare() -> None:
     get_capabilities(refresh=True)
 
 
+def _local_lite_zip() -> Path | None:
+    """仓库内随附的精简版组件包（离线安装用）"""
+    try:
+        from runtime_manager import get_component_dir  # noqa: PLC0415
+
+        path = get_component_dir() / "ffmpeg-lite.zip"
+    except Exception:
+        path = Path(__file__).resolve().parent / "build_components" / "ffmpeg-lite.zip"
+    return path if path.exists() else None
+
+
+def _extract_ffmpeg(zip_path: Path, out_exe: Path) -> bool:
+    """从 zip 中提取 bin/ffmpeg.exe"""
+    with zipfile.ZipFile(zip_path) as archive:
+        for name in archive.namelist():
+            normalized = name.replace("\\", "/")
+            if normalized.endswith("/bin/ffmpeg.exe"):
+                with archive.open(name) as src, open(out_exe, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                return True
+    return False
+
+
+def _install_from_zip(zip_path: Path, target: Path, markers: tuple, label: str) -> bool:
+    """从组件包安装：提取 → 能力校验 → 原子替换到 target"""
+    if not _extract_ffmpeg(zip_path, target.parent / (target.name + ".new")):
+        raise RuntimeError("压缩包中未找到 bin/ffmpeg.exe")
+    staged = target.parent / (target.name + ".new")
+    try:
+        caps = _probe_capabilities(str(staged))
+        missing = [m for m in markers if m not in caps]
+        if missing:
+            raise RuntimeError(f"{label}缺少能力: {missing}")
+        _install(staged, target)
+        return True
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def ensure_available() -> bool:
-    """确保有一个可用的 FFmpeg（缺失时补精简版，约 6MB）
+    """确保有一个可用的 FFmpeg（缺失时补精简版，约 2.3MB 压包）
 
     与 start_auto_upgrade() 的分工：
       - 本函数只在**完全没有 ffmpeg** 时动作，且只下精简版
       - 已有精简版就保持不动，绝不悄悄升级成 161MB 完整版
     需要完整能力（罕见容器、视频重编码等）时，由用户显式点「升级完整版」。
+
+    组件包随仓库分发（build_components/ffmpeg-lite.zip），命中就离线安装，
+    只有在仓库里没带这份包时才去 Release 拉取。
     """
     if ffmpeg_exists():
         return True
@@ -312,29 +354,38 @@ def ensure_available() -> bool:
     resources_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = resources_dir / ".ffmpeg_lite_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = tmp_dir / "ffmpeg-lite.zip"
     exe_path = tmp_dir / "ffmpeg.exe"
 
     last_error = ""
     try:
+        local = _local_lite_zip()
+        if local is not None:
+            logger.info(f"使用仓库内精简版 FFmpeg 组件: {local}")
+            try:
+                if _install_from_zip(local, target, APP_MARKERS, "精简版"):
+                    get_capabilities(refresh=True)
+                    _set("ok", progress=1.0, error="")
+                    signals.capabilities_changed.emit()
+                    signals.finished.emit(True, "精简版 FFmpeg 已就绪")
+                    logger.success(f"精简版 FFmpeg 已就位: {target}")
+                    return True
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"仓库内精简版组件不可用（{local.name}）: {e}")
+
+        zip_path = tmp_dir / "ffmpeg-lite.zip"
         for url in FFMPEG_LITE_URLS:
             try:
                 _set("downloading", url=url)
                 logger.info(f"下载精简版 FFmpeg: {url}")
                 _download_zip(url, zip_path)
-                if not _extract_ffmpeg(zip_path, exe_path):
-                    raise RuntimeError("压缩包中未找到 bin/ffmpeg.exe")
-                caps = _probe_capabilities(str(exe_path))
-                missing = [m for m in LITE_MARKERS if m not in caps]
-                if missing:
-                    raise RuntimeError(f"精简版缺少能力: {missing}")
-                _install(exe_path, target)
-                get_capabilities(refresh=True)
-                _set("ok", progress=1.0, error="")
-                signals.capabilities_changed.emit()
-                signals.finished.emit(True, "精简版 FFmpeg 已就绪")
-                logger.success(f"精简版 FFmpeg 已就位: {target}")
-                return True
+                if _install_from_zip(zip_path, target, APP_MARKERS, "精简版"):
+                    get_capabilities(refresh=True)
+                    _set("ok", progress=1.0, error="")
+                    signals.capabilities_changed.emit()
+                    signals.finished.emit(True, "精简版 FFmpeg 已就绪")
+                    logger.success(f"精简版 FFmpeg 已就位: {target}")
+                    return True
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"精简版 FFmpeg 下载失败 {url}: {e}")
@@ -454,20 +505,14 @@ def _upgrade_worker() -> None:
                 _set("downloading", url=url)
                 logger.info(f"开始下载完整版 FFmpeg: {url}")
                 _download_zip(url, zip_path)
-                if not _extract_ffmpeg(zip_path, exe_path):
-                    raise RuntimeError("压缩包中未找到 ffmpeg.exe")
                 # 校验：能运行且具备完整版能力，才允许替换
-                caps = _probe_capabilities(str(exe_path))
-                missing = [m for m in FULL_MARKERS if m not in caps]
-                if missing:
-                    raise RuntimeError(f"下载的 ffmpeg 缺少能力: {missing}")
-                _install(exe_path, target)
-                get_capabilities(refresh=True)
-                _set("ok", progress=1.0, error="")
-                signals.capabilities_changed.emit()
-                signals.finished.emit(True, f"完整版 FFmpeg 已就绪（{target.name}）")
-                logger.success(f"完整版 FFmpeg 已替换: {target}")
-                return
+                if _install_from_zip(zip_path, target, FULL_MARKERS, "完整版"):
+                    get_capabilities(refresh=True)
+                    _set("ok", progress=1.0, error="")
+                    signals.capabilities_changed.emit()
+                    signals.finished.emit(True, f"完整版 FFmpeg 已就绪（{target.name}）")
+                    logger.success(f"完整版 FFmpeg 已替换: {target}")
+                    return
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"完整版 FFmpeg 下载源失败 {url}: {e}")
@@ -534,15 +579,3 @@ def _download_zip(url: str, dest: Path) -> None:
                         progress = done / total
                         _set("downloading", progress=progress)
                         signals.progress.emit(progress)
-
-
-def _extract_ffmpeg(zip_path: Path, out_exe: Path) -> bool:
-    """从 zip 中提取 bin/ffmpeg.exe"""
-    with zipfile.ZipFile(zip_path) as archive:
-        for name in archive.namelist():
-            normalized = name.replace("\\", "/")
-            if normalized.endswith("/bin/ffmpeg.exe"):
-                with archive.open(name) as src, open(out_exe, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                return True
-    return False

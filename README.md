@@ -69,15 +69,16 @@ git clone https://github.com/Yjiutong/JiuDown.git
 cd JiuDown
 ```
 
-仓库不含任何二进制依赖（运行时 / FFmpeg 均不入库），克隆下来只有约 40 个源码文件；
-缺失的部分会在首次运行时自动拉取。克隆到任意目录都可以，**没有硬编码路径**。
+仓库随附全部必需依赖的组件包（`build_components/`，约 103MB，单包最大 32.5MB），
+克隆下来就能离线跑起来；只有「更新引擎」「升级完整版 FFmpeg」这两个显式操作才需要联网。
+克隆到任意目录都可以，**没有硬编码路径**。
 
 ### 2. 选择一种启动方式
 
 **方式 A：普通用户（无需安装 Python，推荐）**
 
-1. 双击 `首次安装.bat` —— 从 GitHub Release 拉取离线运行时
-   （`runtime\python`，约 320MB，含 PySide6 / yt-dlp / FFmpeg）
+1. 双击 `首次安装.bat` —— 把仓库内 `build_components\` 的组件包解压到 `runtime\`
+   （离线完成，含 Python 3.12 / PySide6 / yt-dlp / FFmpeg 精简版）
 2. 双击 `启动.vbs` —— 静默启动，全程无控制台窗口
 
 **方式 B：开发者（本机已有 Python 3.9+）**
@@ -91,16 +92,16 @@ python app.py
 
 | 缺失项 | 自动处理 | 来源 |
 |---|---|---|
-| `runtime/` | 按组件清单（`manifest.json`）只拉缺失的组件，合计约 100MB | GitHub Release `runtime` 标签 |
-| 运行时里的 `yt-dlp` 后端 | 随 `runtime.zip` 一起下发，**不走 PyPI** | 同上 |
-| `resources/ffmpeg.exe` | 缺失时下载**精简版** FFmpeg（约 2.3MB 压包，覆盖全部下载场景） | 本仓库 Release `runtime` 标签（`ffmpeg-lite.zip`） |
+| `runtime/` | 按组件清单把仓库内 `build_components/` 的组件包解压到 `runtime\`（**离线即可**） | 本仓库（随代码分发） |
+| 运行时里的 `yt-dlp` 后端 | 随 `engine.zip` 组件一起下发，**不走 PyPI** | 同上 |
+| `ffmpeg.exe` | 从仓库内 `build_components/ffmpeg-lite.zip` 取出精简版（5.3MB，覆盖全部下载场景） | 同上 |
 | `config/`、`Download/`、`logs/` | 启动时按程序所在目录自动创建 | 本地 |
 
-> 依赖来源只有两处：本仓库 Release 上的 `runtime.zip`（含 `ffmpeg-lite.zip`），
-> 以及用户显式点「升级完整版」时的 FFmpeg 公开构建源（BtbN）。
-> 若检测到运行时里没有下载引擎（旧版运行时），会自动按 Release 重新拉取，
-> **不会**擅自从 PyPI 安装。设置页的「更新引擎」是显式的增量升级操作（`pip install -U yt-dlp`），
-> 需要离线可控时可改为重新运行 `首次安装.bat`。
+> **克隆即用，不依赖 Release**：所有必需依赖都作为组件包随仓库分发（合计约 103MB，
+> 单包最大 32.5MB，均低于 100MB）。装好 runtime 后断网也能正常启动。
+> GitHub Release 现在只是**可选的更新镜像**：本地组件包缺失或 sha256 对不上时才去下载。
+> 另外两处联网场景都是用户显式触发的：设置页「更新引擎」（会去 Release 取最新 `engine.zip`）、
+> 「升级完整版 FFmpeg」（BtbN 公开构建）。**不会**擅自从 PyPI 安装任何东西。
 
 所有路径都相对程序所在目录解析，移动或改名项目文件夹不会影响使用。
 
@@ -111,22 +112,25 @@ python app.py
 
 | 组件 | 内容 | 压缩后 | 更新频率 |
 |---|---|---|---|
-| `core` | Python 3.12 解释器 + 标准库 | 12.5 MB | 几乎不变 |
+| `core` | Python 3.12 解释器 + 标准库 | 12.6 MB | 几乎不变 |
 | `pyside-1/2/3` | PySide6（已剥离 WebEngine / Pdf / Quick / Qml 等未使用模块，省 420MB） | 30.8 / 31.0 / 17.5 MB | 随界面依赖升级 |
-| `engine` | yt-dlp 与其依赖（Cryptodome / mutagen / websockets / brotli） | **5.3 MB** | 站点改版后 |
-| `app` | requests / loguru / pyyaml / psutil 等运行依赖 | 3.2 MB | 很少变 |
+| `engine` | yt-dlp 与其依赖（Cryptodome / mutagen / websockets / brotli） | **5.2 MB** | 站点改版后 |
+| `app` | requests / loguru / pyyaml / psutil 等运行依赖 | 3.3 MB | 很少变 |
+| `ffmpeg-lite` | 从 FFmpeg 源码裁剪编译的精简版（构建脚本 `tools/build_ffmpeg_lite.sh`） | 2.3 MB | 几乎不变 |
 
-合计约 **100MB**（原整包 339MB）。`ffmpeg.exe` 不进组件，由 `ffmpeg_manager` 独立管理：
-默认使用从 FFmpeg 源码裁剪编译的精简版（5.3MB，构建脚本见 `tools/build_ffmpeg_lite.sh`），
-需要视频重编码等能力时可在设置页显式升级到完整版（约 161MB）。
+合计约 **103MB**（原整包 339MB），**全部随仓库分发**：`build_components/` 目录已入库
+（`.gitignore` 为它开了 `*.zip` 例外），克隆下来就有，断网也能完成首次安装。
+
+`ffmpeg.exe` 不进 runtime 组件，由 `ffmpeg_manager` 独立管理：优先用仓库内
+`ffmpeg-lite.zip` 就地解压，需要视频重编码等能力时可在设置页显式升级到完整版（约 161MB）。
 
 **带来的实际收益**
 
-- 首次安装：从 339MB 降到约 100MB
-- 更新下载引擎：只下 `engine.zip`（5.3MB），设置页点「更新引擎」即完成，重启生效
+- 首次安装：**无需下载**，直接从本地组件包解压（100MB 的解压比 100MB 的下载快得多）
+- 更新下载引擎：只换 `engine.zip`（5.2MB），设置页点「更新引擎」即完成，重启生效
 - 某个组件损坏/缺失：只补那一个组，不再整包重下
 
-**发布新版本组件**
+**打包 / 更新组件**
 
 ```bash
 python tools/build_components.py            # 生成 build_components/*.zip + manifest.json
@@ -134,7 +138,9 @@ python tools/build_components.py --manifest-only   # 只改清单，不重打包
 python tools/build_components.py --keep-all        # 保留 PySide6 全部模块（不剥离）
 ```
 
-把 `build_components/` 里的 zip 与 `manifest.json` 一起上传到 release 的 `runtime` 标签即可。
+生成的包**直接提交进仓库**即可生效（组件 sha256 写在 `manifest.json`，运行端会校验）。
+如果想让老用户也能增量更新，可额外把 `build_components/` 里的 zip 与 `manifest.json`
+上传到 Release 的 `runtime` 标签——本地包不存在或校验不过时会自动回退到那里。
 客户端拉不到 `manifest.json` 时会自动回退到整包 `runtime.zip`（兼容旧发布）。
 
 ## 项目结构
@@ -216,8 +222,9 @@ FFmpeg 转码、错误中文化）。
 
 ### ffmpeg_manager.py / runtime_manager.py
 外部依赖自举。`ffmpeg_manager` 负责 FFmpeg 的能力探测（决定哪些格式/声道可用）、
-精简版自动补齐、完整版显式升级与能力缓存；`runtime_manager` 负责离线运行时
-（`runtime.zip`）的完整性校验与从 GitHub Release 拉取。
+精简版自动补齐（优先用仓库内 `ffmpeg-lite.zip`）、完整版显式升级与能力缓存；
+`runtime_manager` 负责 `runtime\` 的完整性校验，以及用仓库内 `build_components\`
+的组件包离线补齐（本地包不可用时才回退 Release）。
 
 ## 配置说明
 
@@ -287,7 +294,7 @@ download-task:
 4. 点击「开始」并查看实时进度
 
 > 说明：仓库自带的是从 FFmpeg 源码裁剪编译的 **精简版**（5.3MB），已覆盖 mp4 / flv / mp3 / wav
-> 与单声道等全部下载场景，缺失时自动从 Release 组件 `ffmpeg-lite.zip` 补齐。
+> 与单声道等全部下载场景，由 `build_components/ffmpeg-lite.zip` 就地解压获得（离线）。
 > 需要视频重编码、罕见容器等能力时，可在设置页或首页点「升级完整版」（约 161MB，BtbN 构建）。
 
 ### 后台下载与退出

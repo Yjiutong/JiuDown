@@ -15,10 +15,12 @@ yt-dlp 提取器，用户却要重新拉 339 MB —— 不合理。
     engine    yt-dlp 与其依赖                              （每周都可能变，只拉这个）
     app       应用运行依赖（requests/loguru/pyyaml/...）    （很少变）
 
-ffmpeg.exe（161 MB）不进组件：由 ffmpeg_manager 单独下载与管理。
+ffmpeg 另有 `ffmpeg-lite` 组件（2.3MB，由 `tools/build_ffmpeg_lite.sh` 从源码裁剪编译），
+不进 runtime 目录，由 ffmpeg_manager 解压到它自己该去的位置。
 
-发布时把各组件 zip 和 manifest.json 一起传到 release 的 runtime 标签下，
-运行端按 manifest 只补缺失/过期的组件。
+组件包**随仓库一起分发**在 `build_components/`（`.gitignore` 为它开了 `*.zip` 例外），
+克隆下来即可离线安装；Release 上的同名资产只是可选镜像：本地包缺失或 sha256
+对不上时才去下载。
 """
 
 from __future__ import annotations
