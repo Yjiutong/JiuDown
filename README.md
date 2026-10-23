@@ -98,10 +98,12 @@ python app.py
 | `config/`、`Download/`、`logs/` | 启动时按程序所在目录自动创建 | 本地 |
 
 > **克隆即用，不依赖 Release**：所有必需依赖都作为组件包随仓库分发（合计约 103MB，
-> 单包最大 32.5MB，均低于 100MB）。装好 runtime 后断网也能正常启动。
-> GitHub Release 现在只是**可选的更新镜像**：本地组件包缺失或 sha256 对不上时才去下载。
-> 另外两处联网场景都是用户显式触发的：设置页「更新引擎」（会去 Release 取最新 `engine.zip`）、
-> 「升级完整版 FFmpeg」（BtbN 公开构建）。**不会**擅自从 PyPI 安装任何东西。
+> 单包最大 32.5MB，均低于 100MB）。装好 runtime 后断网也能正常启动；
+> GitHub Release 上没有这些资产也不影响使用（唯一来源就是仓库里那份）。
+> 需要联网的只有两处，且都是显式操作：设置页「更新引擎」（先查 Release 有没有新版，
+> 查不到就恢复/保留仓库内置版本，结果会明确提示，不会假装更新成功）、
+> 「升级完整版 FFmpeg」（BtbN 公开构建，与本项目 Release 无关）。
+> **不会**擅自从 PyPI 安装任何东西。
 
 所有路径都相对程序所在目录解析，移动或改名项目文件夹不会影响使用。
 
@@ -139,8 +141,9 @@ python tools/build_components.py --keep-all        # 保留 PySide6 全部模块
 ```
 
 生成的包**直接提交进仓库**即可生效（组件 sha256 写在 `manifest.json`，运行端会校验）。
-如果想让老用户也能增量更新，可额外把 `build_components/` 里的 zip 与 `manifest.json`
-上传到 Release 的 `runtime` 标签——本地包不存在或校验不过时会自动回退到那里。
+Release 是**可选的更新通道**：想让已装好的老用户增量拿到新引擎，可额外把
+`build_components/` 里的 zip 与 `manifest.json` 传到 Release 的 `runtime` 标签；
+不传也没关系——本地包不存在或校验不过时会给出明确提示，不会静默失败。
 客户端拉不到 `manifest.json` 时会自动回退到整包 `runtime.zip`（兼容旧发布）。
 
 ## 项目结构

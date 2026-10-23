@@ -289,7 +289,9 @@ class SettingsPage(QWidget):
         engine_row.addWidget(self.engine_update_btn)
         card_vbox.addLayout(engine_row)
         card_vbox.addWidget(self._make_hint_label(
-            "站点改版导致解析失败时，更新引擎通常即可恢复（打包版请通过安装包升级）"
+            "站点改版导致解析失败时，更新引擎通常即可恢复。"
+            "组件包随仓库分发：点「更新引擎」会先查是否有更新，"
+            "查不到就恢复仓库内置的那份（不会静默降级，结果会明确提示）"
         ))
         vbox.addWidget(card)
 
@@ -578,7 +580,7 @@ class SettingsPage(QWidget):
             self.engine_update_btn.setEnabled(True)
             self._refresh_engine_status()
             if ok:
-                QMessageBox.information(self, "更新完成", f"下载引擎已更新到 {message}")
+                QMessageBox.information(self, "更新完成", message)
             else:
                 QMessageBox.warning(self, "更新失败", message)
 

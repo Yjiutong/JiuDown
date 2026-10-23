@@ -32,9 +32,9 @@ if exist "runtime\python\python.exe" (
 ) else (
     echo.
     echo [FAILED] Could not install runtime automatically.
-    echo          Check network / proxy, or download manually from:
-    echo          https://github.com/Yjiutong/JiuDown/releases/tag/runtime
-    echo          and extract its contents into the "runtime" folder.
+    echo          The bundled components are missing or incomplete.
+    echo          Re-clone / update the repo so that build_components\
+    echo          contains the 6 component zips + manifest.json, then retry.
 )
 echo.
 pause

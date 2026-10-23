@@ -285,7 +285,10 @@ def fetch_component_manifest(timeout: int = 30, local_first: bool = True) -> dic
 
         resp = requests.get(COMPONENT_MANIFEST_URL, timeout=timeout)
         if resp.status_code != 200:
-            logger.info(f"组件清单不可用（HTTP {resp.status_code}），回退整包运行时")
+            logger.info(
+                f"Release 上没有组件清单（HTTP {resp.status_code}）；"
+                "仓库内已随附全部组件，通常无需联网"
+            )
             return None
         data = resp.json()
         if not isinstance(data.get("components"), dict) or not data["components"]:
@@ -293,7 +296,7 @@ def fetch_component_manifest(timeout: int = 30, local_first: bool = True) -> dic
             return None
         return data
     except Exception as e:
-        logger.info(f"获取组件清单失败（{e}），回退整包运行时")
+        logger.info(f"获取组件清单失败（{e}）；仓库内已随附全部组件，通常无需联网")
         return None
 
 
@@ -381,21 +384,51 @@ def _save_component_state(manifest: dict, installed_group: str) -> None:
         logger.debug(f"写入组件状态失败（忽略）: {e}")
 
 
+def _installed_group_build(group: str) -> str:
+    """已安装的该组件组对应的清单构建号（没装过返回空串）"""
+    try:
+        state_path = get_runtime_dir() / COMPONENT_STATE_FILE
+        if not state_path.exists():
+            return ""
+        state = json.loads(state_path.read_text(encoding="utf-8") or "{}")
+        return str(state.get("groups", {}).get(group, {}).get("build") or "")
+    except Exception:
+        return ""
+
+
 def update_engine_component(progress_callback=None) -> tuple[bool, str]:
     """只更新下载引擎组件（几 MB），不再重下整个运行时
 
-    「更新引擎」要拿的是**最新**的引擎，所以先问 Release；网络不可用时
-    退化到仓库内随附的那份（离线也能修好一个坏掉的引擎）。
+    「更新引擎」要拿的是**最新**的引擎，所以先问 Release。Release 上取不到
+    （仓库没发布、被删、断网）时，退化到仓库内随附的那份——这时要说清楚
+    "用的是内置版本、没有拿到更新"，不能假装更新成功。
 
     Returns:
-        (是否成功, 引擎版本或失败原因)
+        (是否成功, 说明文案：版本号或失败原因)
     """
-    manifest = fetch_component_manifest(local_first=False) or load_local_manifest()
-    if not manifest:
-        return False, "未找到组件清单（Release 与仓库内都没有 manifest.json）"
-    if not install_component_group("engine", manifest, progress_callback):
+    remote = fetch_component_manifest(local_first=False)
+    local = load_local_manifest()
+
+    if remote is None:
+        # Release 不可用：用仓库内置的那份修好引擎，并如实告知没有更新源
+        if local is None:
+            return False, "未找到组件清单（Release 不可用，仓库内也没有 manifest.json）"
+        version = str(local.get("engine_version") or "")
+        suffix = f" {version}" if version else ""
+        # 已经是内置的那一份且完好 → 不必再解压一遍
+        if has_engine_backend() and _installed_group_build("engine") == local.get("build"):
+            return True, f"未找到更新源；当前已是仓库内置版本{suffix}，无需更新"
+        if not install_component_group("engine", local, progress_callback):
+            return False, "引擎组件安装失败"
+        return True, f"未找到更新源，已恢复仓库内置版本{suffix}（重启应用生效）"
+
+    if not install_component_group("engine", remote, progress_callback):
         return False, "引擎组件下载或校验失败"
-    return True, str(manifest.get("engine_version") or "")
+    version = str(remote.get("engine_version") or "")
+    bundled = str((local or {}).get("engine_version") or "")
+    if version and version == bundled:
+        return True, f"已是仓库内置版本 {version}，暂无更新（重启应用生效）"
+    return True, f"{version or '最新版'}（重启应用生效）"
 
 
 def ensure_runtime(progress_callback=None) -> bool:

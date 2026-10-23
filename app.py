@@ -117,14 +117,14 @@ def _bootstrap_after_ui(window) -> None:
         try:
             import ffmpeg_manager
             ffmpeg_manager.prepare()
-            # 只在完全没有 ffmpeg 时下载精简版（约 6MB）；
+            # 只在完全没有 ffmpeg 时补精简版（优先用仓库内的 ffmpeg-lite.zip）；
             # 不会自动拉 161MB 完整版——那是用户显式点「升级完整版」才做的事
             ffmpeg_manager.ensure_available()
         except Exception as e:
             logger.error(f"FFmpeg 初始化失败: {e}")
 
-    # 3) 引擎后端自检：yt-dlp 随 runtime.zip 一起从 GitHub Release 发布，
-    #    缺失说明运行时是旧版 —— 重新拉取运行时，绝不走 pip / PyPI
+    # 3) 引擎后端自检：yt-dlp 随 engine 组件一起分发（仓库内 + 可选 Release），
+    #    缺失说明运行时不完整 —— 重新用组件包补齐，绝不走 pip / PyPI
     def _engine_deps() -> None:
         try:
             import importlib
@@ -142,7 +142,7 @@ def _bootstrap_after_ui(window) -> None:
                 logger.info("运行时已包含 yt-dlp，当前进程未加载，重启应用后生效")
                 return
 
-            logger.warning("运行时缺少下载引擎，开始从 GitHub Release 更新运行时…")
+            logger.warning("运行时缺少下载引擎，开始用组件包补齐…")
             if ensure_runtime():
                 importlib.invalidate_caches()
                 if ytdlp_engine.available():
@@ -151,7 +151,8 @@ def _bootstrap_after_ui(window) -> None:
                     logger.info("运行时已更新（含 yt-dlp），重启应用后生效")
             else:
                 logger.error(
-                    "运行时更新失败：请双击「首次安装.bat」重新拉取，或检查网络/代理"
+                    "运行时补齐失败：请双击「首次安装.bat」重试；"
+                    "若 build_components\\ 不完整，请重新克隆或更新仓库"
                 )
         except Exception as e:
             logger.error(f"引擎依赖自检失败: {e}")

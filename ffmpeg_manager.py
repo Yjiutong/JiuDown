@@ -392,9 +392,12 @@ def ensure_available() -> bool:
                 zip_path.unlink(missing_ok=True)
                 exe_path.unlink(missing_ok=True)
                 continue
+        if not last_error:
+            last_error = ("仓库内未随附 build_components/ffmpeg-lite.zip，"
+                          "且没有可用的下载源")
         _set("failed", error=last_error)
         signals.finished.emit(False, last_error)
-        logger.error(f"精简版 FFmpeg 下载失败: {last_error}")
+        logger.error(f"精简版 FFmpeg 就位失败: {last_error}")
         return False
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -367,7 +367,7 @@ class HomePage(QWidget):
         self._refresh_button.setEnabled(False)
         self._engine_value.setText("更新中…")
         self._set_value_tone(self._engine_value, "brand")
-        self._engine_sub.setText("正在通过 pip 更新下载引擎，请稍候…")
+        self._engine_sub.setText("正在更新下载引擎，请稍候…")
 
         def worker() -> None:
             try:
@@ -387,6 +387,8 @@ class HomePage(QWidget):
         self._refresh_engine_state()
         if not ok:
             self._engine_sub.setText(f"更新失败：{message}")
+        else:
+            self._engine_sub.setText(message)
 
     def refresh_theme(self) -> None:
         """主题切换回调：QSS cssClass 自动跟随，此处仅需刷新状态"""
