@@ -194,15 +194,165 @@ def download_runtime(progress_callback=None) -> bool:
         return False
 
 
-def ensure_runtime(progress_callback=None) -> bool:
-    """确保 runtime 环境可用，缺失则自动下载
+# ---------------------------------------------------------------- 组件化安装
+# runtime 被拆成 core / pyside-N / engine / app 若干组件（各自 < 100MB），
+# 发布在 release 的 runtime 标签下，运行端只补缺失或需要更新的组件。
+
+COMPONENT_ASSET_BASE = RUNTIME_RELEASE_URL.rsplit("/", 1)[0]
+COMPONENT_MANIFEST_URL = f"{COMPONENT_ASSET_BASE}/manifest.json"
+COMPONENT_STATE_FILE = "component_state.json"
+
+
+def _release_asset_url(filename: str) -> str:
+    return f"{COMPONENT_ASSET_BASE}/{filename}"
+
+
+def component_marker_present(group: str) -> bool:
+    """该组件组是否已安装（用组内标志文件判断）"""
+    from runtime_components import GROUP_MARKERS  # noqa: PLC0415
+
+    rel = GROUP_MARKERS.get(group)
+    return bool(rel) and (get_runtime_dir() / rel).exists()
+
+
+def fetch_component_manifest(timeout: int = 30) -> dict | None:
+    """拉取 release 上的组件清单；拿不到返回 None（调用方回退整包）"""
+    try:
+        import requests  # noqa: PLC0415
+
+        resp = requests.get(COMPONENT_MANIFEST_URL, timeout=timeout)
+        if resp.status_code != 200:
+            logger.info(f"组件清单不可用（HTTP {resp.status_code}），回退整包运行时")
+            return None
+        data = resp.json()
+        if not isinstance(data.get("components"), dict) or not data["components"]:
+            logger.info("组件清单格式不正确，回退整包运行时")
+            return None
+        return data
+    except Exception as e:
+        logger.info(f"获取组件清单失败（{e}），回退整包运行时")
+        return None
+
+
+def _download_file(url: str, dest: Path, expected_sha256: str, progress_callback=None) -> None:
+    """下载单个组件并校验 sha256（不匹配直接抛错，避免半包污染运行时）"""
+    import requests  # noqa: PLC0415
+
+    with requests.get(url, stream=True, timeout=(15, 300)) as resp:
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length", 0))
+        got = 0
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                got += len(chunk)
+                if progress_callback:
+                    progress_callback(got, total)
+
+    if expected_sha256:
+        digest = hashlib.sha256()
+        with open(dest, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest().lower() != expected_sha256.lower():
+            raise RuntimeError(f"组件校验失败: {dest.name}")
+
+
+def install_component_group(group: str, manifest: dict, progress_callback=None) -> bool:
+    """安装/覆盖一个组件组（组内可能有多个 zip，如 pyside-1/2/3）"""
+    comps = {
+        name: meta for name, meta in manifest.get("components", {}).items()
+        if meta.get("group", name.split("-")[0]) == group
+    }
+    if not comps:
+        logger.warning(f"组件清单里没有 {group}")
+        return False
+
+    runtime_dir = get_runtime_dir()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"jiudown_{group}_"))
+    try:
+        for name, meta in comps.items():
+            url = _release_asset_url(meta.get("file") or f"{name}.zip")
+            size_mb = (meta.get("size") or 0) / 1024 / 1024
+            logger.info(f"下载组件 {name}（{size_mb:.1f} MB）: {url}")
+            zip_path = tmp_dir / (meta.get("file") or f"{name}.zip")
+            _download_file(url, zip_path, meta.get("sha256", ""), progress_callback)
+            logger.info(f"解压组件 {name} …")
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(runtime_dir)
+        _save_component_state(manifest, group)
+        logger.success(f"组件 {group} 安装完成")
+        return True
+    except Exception as e:
+        logger.error(f"组件 {group} 安装失败: {e}")
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _save_component_state(manifest: dict, installed_group: str) -> None:
+    """记录已安装的组件构建号，便于排查版本不一致"""
+    try:
+        state_path = get_runtime_dir() / COMPONENT_STATE_FILE
+        state = {}
+        if state_path.exists():
+            import json  # noqa: PLC0415
+
+            state = json.loads(state_path.read_text(encoding="utf-8") or "{}")
+        import json  # noqa: PLC0415
+
+        state.setdefault("groups", {})[installed_group] = {
+            "build": manifest.get("build", ""),
+            "engine_version": manifest.get("engine_version", ""),
+        }
+        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.debug(f"写入组件状态失败（忽略）: {e}")
+
+
+def update_engine_component(progress_callback=None) -> tuple[bool, str]:
+    """只更新下载引擎组件（几 MB），不再重下整个运行时
 
     Returns:
-        runtime 是否可用
+        (是否成功, 引擎版本或失败原因)
+    """
+    manifest = fetch_component_manifest()
+    if not manifest:
+        return False, "release 上未找到组件清单（manifest.json）"
+    if not install_component_group("engine", manifest, progress_callback):
+        return False, "引擎组件下载或校验失败"
+    return True, str(manifest.get("engine_version") or "")
+
+
+def ensure_runtime(progress_callback=None) -> bool:
+    """确保 runtime 环境可用
+
+    优先按组件清单补齐缺失项（增量、每个组件 < 100MB）；
+    清单不可用时回退到整包 runtime.zip（兼容旧发布）。
     """
     if is_runtime_complete():
         return True
-    logger.info("runtime 环境不完整，开始自动下载...")
+
+    manifest = fetch_component_manifest()
+    if manifest:
+        groups = manifest.get("groups") or ["core", "pyside", "engine", "app"]
+        missing = [g for g in groups if not component_marker_present(g)]
+        if missing:
+            logger.info(f"缺失组件: {', '.join(missing)}（共 {len(missing)} 组），开始按组件拉取…")
+            for group in missing:
+                if not install_component_group(group, manifest, progress_callback):
+                    logger.warning(f"组件 {group} 安装失败，回退整包运行时")
+                    break
+            else:
+                if is_runtime_complete():
+                    return True
+        else:
+            logger.info("组件文件齐全但完整性校验未通过，回退整包运行时")
+
+    logger.info("runtime 环境不完整，开始下载整包 runtime.zip ...")
     return download_runtime(progress_callback=progress_callback)
 
 

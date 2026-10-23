@@ -10,31 +10,30 @@ echo.
 
 if exist "runtime\python\python.exe" (
     echo [OK] Runtime already installed.
-    echo      Double-click the launcher (vbs) to start JiuDown.
+    echo      Double-click the launcher vbs to start JiuDown.
     echo.
     pause
     exit /b 0
 )
 
-set "URL=https://github.com/Yjiutong/JiuDown/releases/download/runtime/runtime.zip"
-
-echo Downloading runtime (~320 MB) from GitHub Release...
-echo   %URL%
-echo This may take a few minutes. Keep this window open.
+echo Installing runtime...
+echo   - preferred: components from GitHub Release ^(~100 MB total^)
+echo   - fallback : full runtime.zip ^(~339 MB^)
+echo   Keep this window open; it may take a few minutes.
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $zip=Join-Path $env:TEMP 'jiudown_runtime.zip'; Invoke-WebRequest -Uri '%URL%' -OutFile $zip -UseBasicParsing; $tmp=Join-Path $env:TEMP ('jiudown_rt_'+[guid]::NewGuid().ToString('N')); Expand-Archive -Path $zip -DestinationPath $tmp -Force; $src=Get-ChildItem $tmp -Directory | Select-Object -First 1; New-Item -ItemType Directory -Force -Path (Join-Path $PWD 'runtime') | Out-Null; Get-ChildItem $src.FullName -Force | Move-Item -Destination (Join-Path $PWD 'runtime') -Force; Remove-Item $zip,$tmp -Recurse -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\install_runtime.ps1"
 
 if exist "runtime\python\python.exe" (
     echo.
     echo [OK] Runtime installed successfully.
-    echo      Double-click the launcher (vbs) to start JiuDown.
+    echo      Double-click the launcher vbs to start JiuDown.
 ) else (
     echo.
     echo [FAILED] Could not install runtime automatically.
-    echo          Check network / proxy, or download this file manually and
-    echo          extract its contents into the "runtime" folder:
-    echo          %URL%
+    echo          Check network / proxy, or download manually from:
+    echo          https://github.com/Yjiutong/JiuDown/releases/tag/runtime
+    echo          and extract its contents into the "runtime" folder.
 )
 echo.
 pause

@@ -91,7 +91,7 @@ python app.py
 
 | 缺失项 | 自动处理 | 来源 |
 |---|---|---|
-| `runtime/`（含 Python / yt-dlp / FFmpeg） | 下载 `runtime.zip` 并解压 | GitHub Release `runtime` 标签 |
+| `runtime/` | 按组件清单（`manifest.json`）只拉缺失的组件，合计约 100MB | GitHub Release `runtime` 标签 |
 | 运行时里的 `yt-dlp` 后端 | 随 `runtime.zip` 一起下发，**不走 PyPI** | 同上 |
 | `resources/ffmpeg.exe` | 下载完整版 FFmpeg 并替换 | BtbN FFmpeg-Builds |
 | `config/`、`Download/`、`logs/` | 启动时按程序所在目录自动创建 | 本地 |
@@ -102,6 +102,37 @@ python app.py
 > 需要离线可控时可改为重新运行 `首次安装.bat`。
 
 所有路径都相对程序所在目录解析，移动或改名项目文件夹不会影响使用。
+
+## 依赖组件与增量更新
+
+运行时不再是单个 339MB 的整包，而是拆成若干 **小于 100MB 的组件**，
+按功能与更新频率切分（打包工具：`tools/build_components.py`）：
+
+| 组件 | 内容 | 压缩后 | 更新频率 |
+|---|---|---|---|
+| `core` | Python 3.12 解释器 + 标准库 | 12.5 MB | 几乎不变 |
+| `pyside-1/2/3` | PySide6（已剥离 WebEngine / Pdf / Quick / Qml 等未使用模块，省 420MB） | 30.8 / 31.0 / 17.5 MB | 随界面依赖升级 |
+| `engine` | yt-dlp 与其依赖（Cryptodome / mutagen / websockets / brotli） | **5.3 MB** | 站点改版后 |
+| `app` | requests / loguru / pyyaml / psutil 等运行依赖 | 3.2 MB | 很少变 |
+
+合计约 **100MB**（原整包 339MB）。`ffmpeg.exe`（161MB）不进组件，由 `ffmpeg_manager` 独立下载管理。
+
+**带来的实际收益**
+
+- 首次安装：从 339MB 降到约 100MB
+- 更新下载引擎：只下 `engine.zip`（5.3MB），设置页点「更新引擎」即完成，重启生效
+- 某个组件损坏/缺失：只补那一个组，不再整包重下
+
+**发布新版本组件**
+
+```bash
+python tools/build_components.py            # 生成 build_components/*.zip + manifest.json
+python tools/build_components.py --manifest-only   # 只改清单，不重打包
+python tools/build_components.py --keep-all        # 保留 PySide6 全部模块（不剥离）
+```
+
+把 `build_components/` 里的 zip 与 `manifest.json` 一起上传到 release 的 `runtime` 标签即可。
+客户端拉不到 `manifest.json` 时会自动回退到整包 `runtime.zip`（兼容旧发布）。
 
 ## 项目结构
 
@@ -126,6 +157,10 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 │   ├── hover_preview.py       # 悬停低清小窗
 │   ├── log_page.py            # 运行日志 + 下载记录
 │   └── settings_page.py       # 设置页（基本/下载/网络/用户/高级）
+├── runtime_components.py      # 运行时组件划分（打包端与运行端共用）
+├── tools/
+│   ├── build_components.py    # 打包运行时组件（生成 zip + manifest.json）
+│   └── install_runtime.ps1    # 首次安装：按组件拉取，失败回退整包
 ├── 启动.vbs                   # 无控制台启动器（自动探测解释器）
 ├── 首次安装.bat               # 首次安装：拉取离线运行时
 ├── JiuDownDesktop.spec        # PyInstaller 打包配置（相对路径）

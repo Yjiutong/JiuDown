@@ -9,6 +9,7 @@
 /.workbuddy/
 
 # ---- 运行时数据与产物 ----
+/build_components/
 /config
 /Download
 /downloads

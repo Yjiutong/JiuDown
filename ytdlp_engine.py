@@ -678,12 +678,31 @@ def _friendly_error(exc: Exception) -> str:
 
 
 def update_engine(progress_cb: Optional[Callable[[str], None]] = None) -> tuple[bool, str]:
-    """通过 pip 升级 yt-dlp（冻结版应用内不可用，返回可读原因）"""
+    """更新下载引擎
+
+    优先从 GitHub Release 拉 engine 组件（约 5MB，只含 yt-dlp 与其依赖），
+    这样升级不需要重下整个运行时；组件清单不可用时才回退 pip 增量升级。
+    """
+    global _version_cache
+    if progress_cb:
+        progress_cb("正在检查引擎组件…")
+    try:
+        from runtime_manager import update_engine_component  # noqa: PLC0415
+
+        ok, message = update_engine_component()
+        if ok:
+            _version_cache = None
+            return True, (message or "引擎组件已更新") + "（重启应用生效）"
+        logger.info(f"引擎组件更新不可用（{message}），尝试 pip 升级")
+    except Exception as e:
+        logger.debug(f"引擎组件更新异常: {e}")
+
+    # ---- 回退：pip 增量升级（开发者环境，或 release 未发布组件清单时） ----
     if getattr(sys, "frozen", False):
         return False, "打包版本请通过重新安装应用更新引擎"
     cmd = [sys.executable, "-m", "pip", "install", "-U", "--disable-pip-version-check", "yt-dlp"]
     if progress_cb:
-        progress_cb("正在更新下载引擎…")
+        progress_cb("正在通过 pip 更新下载引擎…")
     try:
         proc = subprocess.run(
             cmd,
@@ -697,8 +716,6 @@ def update_engine(progress_cb: Optional[Callable[[str], None]] = None) -> tuple[
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["未知错误"]
         return False, f"更新失败: {tail[0]}"
-    # 版本缓存失效，后续重新读取
-    global _version_cache
     _version_cache = None
     return True, version() or "已更新"
 
