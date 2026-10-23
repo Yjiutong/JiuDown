@@ -47,9 +47,12 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 ## 系统要求
 
 ### 操作系统
-- **Windows** 7/8/10/11 (x86/x64)
-- **macOS** 10.14+ (Intel/Apple Silicon)
-- **Linux** Ubuntu 18.04+, CentOS 7+, 其他主流发行版
+- **Windows 10 / 11（x64）** —— 发布包（Setup / Portable）只提供 64 位版本
+- 源码运行：Windows 8.1+（下限来自内嵌的 Python 3.12），macOS / Linux 需自行准备
+  Python 3.9+ 与 PySide6、yt-dlp、FFmpeg（仓库只随附 Windows 运行时组件）
+
+> 精简版 FFmpeg 依赖系统 UCRT（`api-ms-win-crt-*`）：Windows 10 起自带，
+> Windows 8.1 及更早需要安装 [KB2999226](https://support.microsoft.com/kb/2999226)。
 
 ### Python环境
 - **Python** 3.9+
@@ -61,6 +64,25 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 - **网络**: 稳定的互联网连接
 
 ## 安装指南
+
+### 0. 直接下载发布包（普通用户推荐）
+
+Release 上提供两个**内容完全一致**、只是形态不同的包（由 `tools/build_release.py` 构建）：
+
+| 产物 | 大小 | 适合谁 | 说明 |
+|---|---|---|---|
+| `JiuDown-Portable-<版本>.zip` | 约 110MB | 想解压就用、放 U 盘随身携带 | 解压到任意目录 → 双击 `启动.vbs`。配置/下载/日志全在该目录里，整个目录拷走即迁移，删目录即卸载 |
+| `JiuDown-Setup-<版本>.exe` | 约 73MB | 想正规安装、要有开始菜单和卸载项 | 装到 `Program Files`，开始菜单/桌面快捷方式、控制面板卸载项齐全 |
+
+两者都自带完整的离线运行环境（Python 3.12 + PySide6 + yt-dlp + 精简版 FFmpeg），
+**装完断网也能用**。
+
+> 两种形态下"用户数据放哪"是不同的，代码会自动判断：
+> - **便携版**（程序目录可写）→ 配置/下载/日志/临时文件都写在程序目录里
+> - **安装版**（Program Files 只读）→ 配置、日志、临时文件落到 `%LOCALAPPDATA%\JiuDown`，
+>   下载默认进系统「下载」文件夹
+>
+> 判断逻辑见 `system_info.get_install_mode()`。
 
 ### 1. 克隆项目
 
@@ -145,6 +167,39 @@ Release 是**可选的更新通道**：想让已装好的老用户增量拿到�
 `build_components/` 里的 zip 与 `manifest.json` 传到 Release 的 `runtime` 标签；
 不传也没关系——本地包不存在或校验不过时会给出明确提示，不会静默失败。
 客户端拉不到 `manifest.json` 时会自动回退到整包 `runtime.zip`（兼容旧发布）。
+
+## 构建发布包
+
+```bash
+runtime\python\python.exe tools/build_release.py            # zip + setup 都构建
+runtime\python\python.exe tools/build_release.py --only zip   # 只打便携版
+runtime\python\python.exe tools/build_release.py --version 1.1.0
+```
+
+产物（不入库，`.gitignore` 已忽略 `dist/`）：
+
+| 文件 | 说明 |
+|---|---|
+| `JiuDown-Portable-<版本>.zip` | 约 110MB，解压即用 |
+| `JiuDown-Setup-<版本>.exe` | 约 73MB，Inno Setup 安装程序 |
+| `SHA256SUMS.txt` | 两个产物的校验值 |
+
+两个包装的内容完全一致：源码 + `runtime\` + `resources\`（含 FFmpeg）+ `build_components\`
+里的三个离线修复包（manifest / engine / ffmpeg-lite）。
+
+**setup 版需要 Inno Setup 编译器**（只用来编译安装脚本，不随仓库分发）：
+
+```bash
+# 官网 https://jrsoftware.org/isdl.php ；便携解压方式（不写注册表、不装进系统）
+innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tools\_vendor\innosetup"
+```
+
+脚本会自动找 `tools\_vendor\innosetup\ISCC.exe`，找不到会打印下载地址；
+已有 Inno Setup 时用 `--iscc <路径>` 指定。构建前会自检 runtime / FFmpeg / 图标是否齐全，
+并自动用 `resources\` 重建 `ffmpeg-lite.zip`（含 FFmpeg 依赖的 MinGW 运行库）。
+
+> `tools/build_release.py` 的 precheck 会校验包内不含开发期文件（TEMP / tools / .git /
+> __pycache__），`TEMP/verify_release.py` 会解析 PE 导入表确认 FFmpeg 的依赖 DLL 都随包分发。
 
 ## 项目结构
 
@@ -231,19 +286,33 @@ FFmpeg 转码、错误中文化）。
 
 ## 配置说明
 
-### 配置文件位置（便携模式）
-程序采用**便携模式**，所有数据均存放在程序目录下（相对 `app.py` / exe 解析，**不写死任何绝对路径**），
-**不写入系统 AppData**，因此整个文件夹可以随意移动或改名：
+### 配置文件位置
 
-- **配置**: `<程序目录>/config/config.yaml`
-- **日志**: `<程序目录>/logs/`
-- **临时文件**: `<程序目录>/TEMP/`
-- **下载目录**: `<程序目录>/Download/`
-- **离线运行时**: `<程序目录>/runtime/`（首次安装时拉取，不入库）
-- **FFmpeg**: `<程序目录>/resources/ffmpeg.exe`（首次运行自动下载，不入库）
-- **图标**: `<程序目录>/resources/app.ico`（唯一入库的二进制资源）
+程序**不写死任何绝对路径**，所有目录相对程序位置解析，因此文件夹可以随意移动或改名。
+数据落在哪，取决于运行形态（自动判断，见 `system_info.get_install_mode()`）：
 
-> 旧版本写入 `%APPDATA%\JiuDown` / `%APPDATA%\SHOUDown` 的配置会在首次启动时迁移到便携目录并清理旧目录。
+**便携模式**（程序目录可写 —— 解压即用 / 源码运行）
+
+- 配置: `<程序目录>/config/config.yaml`
+- 日志: `<程序目录>/logs/`
+- 临时文件: `<程序目录>/TEMP/`
+- 下载目录: `<程序目录>/Download/`
+- FFmpeg: `<程序目录>/resources/ffmpeg.exe`（随发布包分发，缺失时从组件包离线补齐）
+
+**安装模式**（程序目录只读 —— 装到 Program Files 的 setup 版）
+
+- 配置: `%LOCALAPPDATA%/JiuDown/config/config.yaml`
+- 日志: `%LOCALAPPDATA%/JiuDown/logs/`
+- 临时文件: `%LOCALAPPDATA%/JiuDown/TEMP/`
+- 下载目录: `~/Downloads/JiuDown/`（设置页可改）
+- FFmpeg: 程序目录只读，升级/下载的副本写到 `%LOCALAPPDATA%/JiuDown/resources/`
+
+两种形态下都在程序目录里的：
+- **离线运行时**: `<程序目录>/runtime/`
+- **图标**: `<程序目录>/resources/app.ico`
+
+> 旧版本写入 `%APPDATA%\JiuDown` / `%APPDATA%\SHOUDown` 的配置会在**便携模式**首次启动时
+> 迁移到程序目录并清理旧目录；安装模式不做这个迁移（数据本就在用户目录下）。
 
 ### 主要配置项
 

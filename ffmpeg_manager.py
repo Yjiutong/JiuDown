@@ -34,6 +34,9 @@ from PySide6.QtCore import QObject, Signal
 from config_manager import config_manager
 from system_info import system_info
 
+# Windows 二进制名（Linux/macOS 无后缀）
+FFMPEG_EXE_NAME = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+
 # 完整版下载源（按顺序尝试，全部失败才报错）。
 # BtbN 的 latest/download 是固定资源名，无需 GitHub API（无速率限制）。
 FFMPEG_URLS = [
@@ -162,16 +165,12 @@ def _save_disk_caps(key, caps, version: str) -> None:
 # ---------------------------------------------------------------- 公共 API
 
 def get_ffmpeg_path() -> str:
-    """应用使用的 FFmpeg 路径（优先 runtime/ffmpeg.exe，其次 config 配置）"""
-    # 优先使用 runtime 目录下的 ffmpeg
-    from pathlib import Path
-    base_dir = Path(__file__).resolve().parent
-    if getattr(sys, 'frozen', False):
-        base_dir = Path(sys.executable).resolve().parent
-    runtime_ffmpeg = base_dir / 'runtime' / 'ffmpeg.exe'
-    if runtime_ffmpeg.exists():
-        return str(runtime_ffmpeg)
-    return config_manager.get_ffmpeg_path()
+    """应用使用的 FFmpeg 路径
+
+    查找顺序：用户数据目录下升级过的副本 → runtime/ffmpeg.exe → 程序内置 resources/。
+    路径统一由 system_info 计算（安装模式下程序目录只读，下载/升级的副本放在用户目录）。
+    """
+    return system_info.get_default_paths()["ffmpeg_path"]
 
 
 def ffmpeg_exists() -> bool:
@@ -200,7 +199,13 @@ def get_capabilities(refresh: bool = False) -> frozenset:
         else:
             caps = _probe_capabilities(path)
             version = _probe_version(path)
-            _save_disk_caps(key, caps, version)
+            # 探测出空结果（ffmpeg 被占用/缺 DLL/被拦截）时**绝不落盘**：
+            # 否则一次偶发失败会被永久记住，之后即使 ffmpeg 修好了也一直显示能力不足。
+            # 磁盘缓存的键只跟二进制有关，不会因"这次失败"而失效——踩过。
+            if caps:
+                _save_disk_caps(key, caps, version)
+            else:
+                logger.warning("FFmpeg 能力探测为空，本次结果不写入磁盘缓存")
     with _cap_lock:
         _cap_cache.update(key=key, caps=caps, version=version)
     return caps
@@ -308,21 +313,41 @@ def _local_lite_zip() -> Path | None:
 
 
 def _extract_ffmpeg(zip_path: Path, out_exe: Path) -> bool:
-    """从 zip 中提取 bin/ffmpeg.exe"""
+    """从 zip 中提取 bin/ 下的全部文件（含 exe 与其依赖的 DLL）
+
+    精简版是 MinGW 编译的，pthread 头文件用 dllimport 声明，静态链接不掉
+    libwinpthread-1.dll，所以必须把它和 ffmpeg.exe 一起提取到同一个目录，
+    否则在没装 MinGW 的用户机器上会 0xC0000135 直接启动失败。
+    """
+    extracted = False
     with zipfile.ZipFile(zip_path) as archive:
+        bin_prefixes = []
         for name in archive.namelist():
             normalized = name.replace("\\", "/")
-            if normalized.endswith("/bin/ffmpeg.exe"):
-                with archive.open(name) as src, open(out_exe, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                return True
-    return False
+            if normalized.endswith("/bin/" + FFMPEG_EXE_NAME):
+                bin_prefixes.append(normalized[: -len(FFMPEG_EXE_NAME)])
+        if not bin_prefixes:
+            return False
+        prefix = bin_prefixes[0]
+        for name in archive.namelist():
+            normalized = name.replace("\\", "/")
+            if not normalized.startswith(prefix) or normalized.endswith("/"):
+                continue
+            rel = normalized[len(prefix):]
+            # exe 用调用方给定的名字（便于"先落盘成 .new 再原子替换"），
+            # 其余文件（DLL 等）保持原名放在同一目录
+            target = out_exe if rel == FFMPEG_EXE_NAME else out_exe.parent / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(name) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            extracted = True
+    return extracted
 
 
 def _install_from_zip(zip_path: Path, target: Path, markers: tuple, label: str) -> bool:
     """从组件包安装：提取 → 能力校验 → 原子替换到 target"""
     if not _extract_ffmpeg(zip_path, target.parent / (target.name + ".new")):
-        raise RuntimeError("压缩包中未找到 bin/ffmpeg.exe")
+        raise RuntimeError(f"压缩包中未找到 bin/{FFMPEG_EXE_NAME}")
     staged = target.parent / (target.name + ".new")
     try:
         caps = _probe_capabilities(str(staged))
@@ -349,12 +374,12 @@ def ensure_available() -> bool:
     if ffmpeg_exists():
         return True
 
-    target = Path(get_ffmpeg_path())
-    resources_dir = Path(system_info.get_default_paths()["resources_dir"])
+    target = Path(system_info.get_writable_resources_dir()) / FFMPEG_EXE_NAME
+    resources_dir = Path(system_info.get_writable_resources_dir())
     resources_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = resources_dir / ".ffmpeg_lite_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    exe_path = tmp_dir / "ffmpeg.exe"
+    exe_path = tmp_dir / FFMPEG_EXE_NAME
 
     last_error = ""
     try:
@@ -493,13 +518,13 @@ def _set(status: str, **kwargs) -> None:
 
 def _upgrade_worker() -> None:
     """后台线程：下载完整版 → 校验 → 替换"""
-    target = Path(get_ffmpeg_path())
-    resources_dir = Path(system_info.get_default_paths()["resources_dir"])
+    target = Path(system_info.get_writable_resources_dir()) / FFMPEG_EXE_NAME
+    resources_dir = Path(system_info.get_writable_resources_dir())
     resources_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = resources_dir / ".ffmpeg_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     zip_path = tmp_dir / "ffmpeg.zip"
-    exe_path = tmp_dir / "ffmpeg.exe"
+    exe_path = tmp_dir / FFMPEG_EXE_NAME
 
     try:
         last_error = ""

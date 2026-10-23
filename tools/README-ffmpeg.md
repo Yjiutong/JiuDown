@@ -78,7 +78,7 @@ bash tools/build_ffmpeg_lite.sh
 脚本会先手写 `lame-3.100/config.h` 编译 libmp3lame（不走 LAME 自带的 autoconf，
 原因见下），再配置并编译 FFmpeg。
 
-## 三个踩过的坑
+## 四个踩过的坑
 
 1. **LAME 的 autoconf 在 Windows 上会卡死**
    `./configure` 停在 `checking whether the C compiler works` 不动（conftest.exe 被
@@ -99,20 +99,30 @@ bash tools/build_ffmpeg_lite.sh
 
 ## 发布
 
-产物 5.3MB，打包结构必须是 `bin/ffmpeg.exe`（`_extract_ffmpeg` 按此后缀查找）：
+产物 5.3MB，打包结构必须是 `bin/ffmpeg.exe`（`_extract_ffmpeg` 按此前缀定位 bin/ 目录）。
+**`resources/` 下的 `.dll` 必须一起打进去**——见下面的坑 4。`tools/build_release.py`
+会自动重建这个包（`refresh_ffmpeg_lite_zip()`），不用手写：
 
 ```bash
-python -c "
-import zipfile
-with zipfile.ZipFile('build_components/ffmpeg-lite.zip','w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:
-    z.write('resources/ffmpeg.exe','ffmpeg-lite/bin/ffmpeg.exe')
-"
+runtime\python\python.exe tools/build_release.py      # 顺带刷新 ffmpeg-lite.zip
 ```
 
 压包只有 2.3MB，**直接提交进仓库**（`.gitignore` 为 `build_components/*.zip` 开了例外）。
 `ffmpeg_manager.ensure_available()` 会优先用它离线安装，命中就完全不联网；
 只有仓库里没带这份包时才去 `FFMPEG_LITE_URLS`（Release）拉取，
 所以 Release 上那份只是可选镜像，不是必需项。
+
+4. **MinGW 产物会依赖 `libwinpthread-1.dll`（必带，别漏）**
+   `pthread.h` 里的函数是用 `__declspec(dllimport)` 声明的，静态链接不掉——
+   试过 `-static`、`-Wl,-Bstatic -lwinpthread`、直接指定 `libwinpthread.a`、
+   甚至临时移走 `libwinpthread.dll.a`，导入表里照样有它（唯一的根治办法是重编译
+   时定义 `WINPTHREAD_STATIC`，要再付一次 ~30 分钟的 configure）。
+   所以发布包必须把 `libwinpthread-1.dll`（72KB）和 ffmpeg.exe 放在同一目录；
+   否则开发机上一切正常（PATH 里有 mingw），用户机器上就是 **0xC0000135 启动即崩**。
+   `TEMP/verify_release.py` 会解析 PE 导入表做这项检查。
+
+   顺带：产物还依赖 `api-ms-win-crt-*`（UCRT），Windows 10 起自带，
+   Windows 8.1 及更早需要 KB2999226。
 
 ## 许可证
 

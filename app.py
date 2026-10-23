@@ -21,11 +21,22 @@ from loguru import logger
 
 
 def configure_logger() -> None:
-    """配置 loguru 日志：仅文件日志（无控制台输出，避免窗口闪现）"""
+    """配置 loguru 日志：仅文件日志（无控制台输出，避免窗口闪现）
+
+    日志路径取自 system_info 的绝对值：安装模式下程序目录只读，
+    日志会落在 %LOCALAPPDATA%\\JiuDown\\logs，且不能依赖当前工作目录。
+    """
+    from system_info import system_info
+
     logger.remove()
+    logs_dir = pathlib.Path(system_info.get_default_paths()['logs_dir'])
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     # 完全移除控制台输出（windowed 模式下 stderr 会导致窗口闪现）
     logger.add(
-        "logs/JiuDown_{time:YYYY-MM-DD}.log",
+        str(logs_dir / "JiuDown_{time:YYYY-MM-DD}.log"),
         rotation="1 day",
         retention="7 days",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}",
@@ -86,10 +97,18 @@ def initialize_config() -> None:
         default_paths["resources_dir"],
     ]
     for folder in folders:
-        pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
+        try:
+            pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            # 安装模式下程序目录只读，resources_dir 由安装器创建，此处失败可忽略
+            logger.warning(f"无法创建目录 {folder}: {e}")
 
-    # 迁移旧版 AppData 配置到便携目录（首次运行）
-    _migrate_old_appdata_config()
+    # 迁移旧版 AppData 配置到便携目录（首次运行）。
+    # 安装模式下数据本就在 %LOCALAPPDATA%，不存在"迁回程序目录"这回事，直接跳过。
+    from system_info import system_info
+
+    if system_info.get_install_mode() == 'portable':
+        _migrate_old_appdata_config()
 
     config_manager.initialize()
     system_info.initialize()

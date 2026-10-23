@@ -2,8 +2,10 @@
 # 虚拟环境不入库：自行 `python -m venv .venv`，或双击「首次安装.bat」拉取 runtime
 /.vscode
 /.venv
+# ---- 发布产物与第三方构建工具（均由 tools/build_release.py 生成/下载） ----
 /build
 /dist
+/tools/_vendor/
 
 # ---- AI 工作记忆（本地私有，不入库） ----
 /.workbuddy/

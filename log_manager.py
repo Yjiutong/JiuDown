@@ -5,16 +5,30 @@
 
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from loguru import logger
+
+
+def _default_core_log_path() -> Path:
+    """核心日志默认路径：跟随用户数据目录（安装模式下程序目录只读）"""
+    try:
+        from system_info import system_info
+
+        return Path(system_info.get_default_paths()["logs_dir"]) / "core_log.txt"
+    except Exception:
+        return Path("logs/core_log.txt")
 
 
 class CoreLogManager:
     """日志管理器，负责日志的持久化存储和恢复"""
     
-    def __init__(self, log_file_path: str = "logs/core_log.txt"):
-        self.log_file_path = Path(log_file_path)
-        self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, log_file_path: Optional[str] = None):
+        self.log_file_path = Path(log_file_path) if log_file_path else _default_core_log_path()
+        try:
+            self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            # 安装模式下程序目录只读，这里必须容错——否则模块级导入直接把应用带崩
+            logger.warning(f"无法创建日志目录 {self.log_file_path.parent}: {e}")
         self.max_log_lines = 1000  # 最大保存日志行数
         self._truncate_bytes = 512 * 1024  # 超过该体积才做截断检查（节流）
         self._save_count = 0
