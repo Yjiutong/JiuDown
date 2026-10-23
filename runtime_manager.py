@@ -34,13 +34,14 @@ RUNTIME_RELEASE_URL = (
 # runtime 目录位置（应用根目录下）
 RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 RUNTIME_PYTHON = RUNTIME_DIR / "python" / "python.exe"
-RUNTIME_FFMPEG = RUNTIME_DIR / "ffmpeg.exe"
 
 # 完整性检查：这些文件必须存在
+# 注意：ffmpeg.exe 不在此列。它由 ffmpeg_manager 独立管理（优先 runtime/ffmpeg.exe，
+# 其次 resources/ffmpeg.exe，缺失时自动下载），也不进任何组件包；若把它算作 runtime
+# 完整性的一部分，组件化安装出来的新 runtime 会被永远判为不完整、每次启动重复拉取。
 REQUIRED_FILES = [
     "python/python.exe",
     "python/python312.dll",
-    "ffmpeg.exe",
 ]
 
 # 引擎后端随 runtime.zip 一起发布（不再从 PyPI 安装），缺它视为运行时过期

@@ -241,7 +241,7 @@ class SettingsPage(QWidget):
         ))
         card_vbox.addLayout(row)
 
-        # FFmpeg 版本状态 + 完整版下载（仓库内置精简版，功能受限）
+        # FFmpeg 版本状态 + 完整版升级（仓库内置精简版已覆盖下载链路）
         ffmpeg_row = QHBoxLayout()
         ffmpeg_row.setSpacing(10)
         self.ffmpeg_status_label = QLabel("检测中…")
@@ -258,8 +258,8 @@ class SettingsPage(QWidget):
         ffmpeg_row.addWidget(self.ffmpeg_download_btn)
         card_vbox.addLayout(ffmpeg_row)
         card_vbox.addWidget(self._make_hint_label(
-            "精简版仅支持 mp4 / mp3；完整版额外支持 flv / wav 与单声道，"
-            "启动时检测到精简版会自动在后台下载替换"
+            "仓库自带的是从源码裁剪编译的精简版（约 5MB），已支持 mp4 / flv / mp3 / wav "
+            "与单声道，覆盖全部下载场景；需要视频重编码等能力时可升级到完整版（约 161MB）"
         ))
         vbox.addWidget(card)
 
@@ -605,14 +605,14 @@ class SettingsPage(QWidget):
                 self.default_format.setCurrentText("mp4")
 
     def _refresh_ffmpeg_status(self) -> None:
-        """刷新 FFmpeg 状态行：完整版 / 精简版 / 下载中 / 失败 / 未找到"""
+        """刷新 FFmpeg 状态行：完整版 / 精简版（能力齐备）/ 能力不足 / 下载中 / 失败 / 未找到"""
         state = ffmpeg_manager.get_status()
         status = state["status"]
         version = state.get("version") or ""
         if status == "downloading":
             percent = int(state.get("progress", 0) * 100)
             self.ffmpeg_status_label.setText(
-                f"正在下载完整版 FFmpeg… {percent}%（约 80MB，后台进行）"
+                f"正在下载完整版 FFmpeg… {percent}%（约 161MB，后台进行）"
             )
             self.ffmpeg_progress.setValue(percent)
             self.ffmpeg_progress.show()
@@ -625,10 +625,20 @@ class SettingsPage(QWidget):
             self.ffmpeg_progress.hide()
             self.ffmpeg_download_btn.setEnabled(False)
             self.ffmpeg_download_btn.setText("已是完整版")
-        elif status == "lite":
+        elif status == "ready":
             self.ffmpeg_status_label.setText(
-                f"精简版 FFmpeg {version}：flv / wav 与单声道不可用"
-                if version else "精简版 FFmpeg：flv / wav 与单声道不可用"
+                f"精简版 FFmpeg {version}：下载所需能力齐备（可选升级完整版）"
+                if version else "精简版 FFmpeg：下载所需能力齐备（可选升级完整版）"
+            )
+            self.ffmpeg_progress.hide()
+            self.ffmpeg_download_btn.setEnabled(True)
+            self.ffmpeg_download_btn.setText("升级完整版")
+        elif status == "lite":
+            feats = ffmpeg_manager.missing_features()
+            detail = " / ".join(feats) if feats else "部分能力"
+            self.ffmpeg_status_label.setText(
+                f"当前 FFmpeg {version}：{detail} 不可用（可升级完整版）"
+                if version else f"当前 FFmpeg：{detail} 不可用（可升级完整版）"
             )
             self.ffmpeg_progress.hide()
             self.ffmpeg_download_btn.setEnabled(True)
@@ -641,10 +651,10 @@ class SettingsPage(QWidget):
             self.ffmpeg_download_btn.setEnabled(True)
             self.ffmpeg_download_btn.setText("重试下载")
         else:  # missing
-            self.ffmpeg_status_label.setText("未找到 FFmpeg，将自动下载完整版")
+            self.ffmpeg_status_label.setText("未找到 FFmpeg，将自动下载精简版")
             self.ffmpeg_progress.hide()
             self.ffmpeg_download_btn.setEnabled(True)
-            self.ffmpeg_download_btn.setText("下载完整版")
+            self.ffmpeg_download_btn.setText("下载 FFmpeg")
 
     def _download_full_ffmpeg(self) -> None:
         """手动触发完整版下载（自动下载失败或用户主动升级时）"""

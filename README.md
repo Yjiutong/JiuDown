@@ -42,7 +42,7 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 - 🔧 **灵活配置**：下载目录、临时目录、代理、Cookie 来源、限速、并发均可配置
 - 📝 **详细日志**：运行日志与下载记录双面板，彩色分级、可打开日志目录
 - 🎬 **在线预览**：悬停标签播放低清流，任务卡内嵌播放器可看在线/本地
-- 🔄 **自动更新**：FFmpeg 完整版自动拉取，yt-dlp 引擎一键升级
+- 🔄 **自动更新**：FFmpeg 缺失自动补精简版，yt-dlp 引擎一键增量升级
 
 ## 系统要求
 
@@ -93,10 +93,11 @@ python app.py
 |---|---|---|
 | `runtime/` | 按组件清单（`manifest.json`）只拉缺失的组件，合计约 100MB | GitHub Release `runtime` 标签 |
 | 运行时里的 `yt-dlp` 后端 | 随 `runtime.zip` 一起下发，**不走 PyPI** | 同上 |
-| `resources/ffmpeg.exe` | 下载完整版 FFmpeg 并替换 | BtbN FFmpeg-Builds |
+| `resources/ffmpeg.exe` | 缺失时下载**精简版** FFmpeg（约 2.3MB 压包，覆盖全部下载场景） | 本仓库 Release `runtime` 标签（`ffmpeg-lite.zip`） |
 | `config/`、`Download/`、`logs/` | 启动时按程序所在目录自动创建 | 本地 |
 
-> 依赖来源只有两处：本仓库 Release 上的 `runtime.zip`，以及 FFmpeg 的公开构建源。
+> 依赖来源只有两处：本仓库 Release 上的 `runtime.zip`（含 `ffmpeg-lite.zip`），
+> 以及用户显式点「升级完整版」时的 FFmpeg 公开构建源（BtbN）。
 > 若检测到运行时里没有下载引擎（旧版运行时），会自动按 Release 重新拉取，
 > **不会**擅自从 PyPI 安装。设置页的「更新引擎」是显式的增量升级操作（`pip install -U yt-dlp`），
 > 需要离线可控时可改为重新运行 `首次安装.bat`。
@@ -115,7 +116,9 @@ python app.py
 | `engine` | yt-dlp 与其依赖（Cryptodome / mutagen / websockets / brotli） | **5.3 MB** | 站点改版后 |
 | `app` | requests / loguru / pyyaml / psutil 等运行依赖 | 3.2 MB | 很少变 |
 
-合计约 **100MB**（原整包 339MB）。`ffmpeg.exe`（161MB）不进组件，由 `ffmpeg_manager` 独立下载管理。
+合计约 **100MB**（原整包 339MB）。`ffmpeg.exe` 不进组件，由 `ffmpeg_manager` 独立管理：
+默认使用从 FFmpeg 源码裁剪编译的精简版（5.3MB，构建脚本见 `tools/build_ffmpeg_lite.sh`），
+需要视频重编码等能力时可在设置页显式升级到完整版（约 161MB）。
 
 **带来的实际收益**
 
@@ -212,8 +215,9 @@ FFmpeg 转码、错误中文化）。
 - 缓存机制
 
 ### ffmpeg_manager.py / runtime_manager.py
-外部依赖自举。`ffmpeg_manager` 负责 FFmpeg 的探测、精简版/完整版识别、自动下载与能力缓存；
-`runtime_manager` 负责离线运行时（`runtime.zip`）的完整性校验与从 GitHub Release 拉取。
+外部依赖自举。`ffmpeg_manager` 负责 FFmpeg 的能力探测（决定哪些格式/声道可用）、
+精简版自动补齐、完整版显式升级与能力缓存；`runtime_manager` 负责离线运行时
+（`runtime.zip`）的完整性校验与从 GitHub Release 拉取。
 
 ## 配置说明
 
@@ -282,7 +286,9 @@ download-task:
 3. 设置保存路径
 4. 点击「开始」并查看实时进度
 
-> 说明：完整版 FFmpeg（约 100MB）**不随仓库分发**。首次启动或缺失时应用会在后台自动拉取（源：gyan.dev essentials 构建），下载完成后自动启用；也可手动下载后放入 `resources\ffmpeg.exe`。状态总览页可查看下载进度或手动触发下载。
+> 说明：仓库自带的是从 FFmpeg 源码裁剪编译的 **精简版**（5.3MB），已覆盖 mp4 / flv / mp3 / wav
+> 与单声道等全部下载场景，缺失时自动从 Release 组件 `ffmpeg-lite.zip` 补齐。
+> 需要视频重编码、罕见容器等能力时，可在设置页或首页点「升级完整版」（约 161MB，BtbN 构建）。
 
 ### 后台下载与退出
 - 关闭窗口时若仍有未完成任务，应用会隐藏到**系统托盘**继续后台下载，全部任务完成后自动退出

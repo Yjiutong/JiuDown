@@ -112,12 +112,14 @@ def _bootstrap_after_ui(window) -> None:
         except Exception as e:
             logger.error(f"runtime 自检失败: {e}")
 
-    # 2) FFmpeg：能力探测（磁盘缓存命中时瞬时）+ 需要时后台升级
+    # 2) FFmpeg：能力探测（磁盘缓存命中时瞬时）+ 缺失时才补精简版
     def _ffmpeg_init() -> None:
         try:
             import ffmpeg_manager
             ffmpeg_manager.prepare()
-            ffmpeg_manager.start_auto_upgrade()
+            # 只在完全没有 ffmpeg 时下载精简版（约 6MB）；
+            # 不会自动拉 161MB 完整版——那是用户显式点「升级完整版」才做的事
+            ffmpeg_manager.ensure_available()
         except Exception as e:
             logger.error(f"FFmpeg 初始化失败: {e}")
 

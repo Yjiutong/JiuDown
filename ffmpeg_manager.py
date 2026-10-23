@@ -1,17 +1,20 @@
 """
-FFmpeg 环境管理（完整版自动升级）
+FFmpeg 环境管理（精简版优先 + 用户显式升级完整版）
 
-仓库不再跟踪 ffmpeg.exe（已加入 .gitignore），本地保留完整版二进制。
-新 clone 用户首次启动时自动下载完整版；已有本地副本则直接使用。
+仓库跟踪的是一个从源码裁剪编译的精简版 ffmpeg.exe（约 5MB），已覆盖下载
+链路所需的全部能力：容器重封装（mp4/flv/mkv…）、DASH 分片合并、mp3/wav
+音频转码、声道重采样。缺失时自动从 Release 组件拉取（见 FFMPEG_LITE_URLS）。
+
+需要视频重编码、罕见容器/滤镜等能力时，由用户在设置页显式点「下载完整版」
+（约 161MB 的 BtbN 构建），本模块负责下载、校验并原子替换。
 
 启动时探测当前 ffmpeg 的能力：
-- 完整版   → 无事
-- 精简版/缺失 → 后台自动下载完整版 → 提取 → 校验能力 → 原子替换到目标路径
-               （目标被占用时退避重试；仍失败则暂存 ffmpeg-full.exe，
-                由下次启动补替换）
+- 能力齐备（full / ready） → 无事
+- 能力不足（lite）         → UI 门控掉做不到的格式/声道，并提示可升级
+- 缺失（missing）          → 自动拉取精简版
 
 UI 侧通过 format_supported() / mono_supported() 禁用当前 ffmpeg 做不到的
-选项；完整版就绪后经 capabilities_changed 信号重新门控。
+选项；二进制被替换后经 capabilities_changed 信号重新门控。
 """
 
 import json
@@ -38,16 +41,36 @@ FFMPEG_URLS = [
     "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
 ]
 
-# 输出格式 → 所需 ffmpeg 能力（精简版缺 flv/wav 封装器与 pcm 编码器）
+# 精简版下载源（约 5MB）：由 tools/build_ffmpeg_lite.sh 从 FFmpeg 源码裁剪编译，
+# 只含容器重封装 + 音频转码（含 libmp3lame）所需组件。
+# 缺失时优先拉这个，而不是 161MB 的完整版。
+FFMPEG_LITE_URLS = [
+    "https://github.com/Yjiutong/JiuDown/releases/download/runtime/ffmpeg-lite.zip",
+]
+
+# 应用所需能力：下载链路（重封装 / DASH 合并 / mp3、wav 转码 / 单声道）
+# 缺任何一项，对应格式或声道选项就要在 UI 置灰
+APP_MARKERS = (
+    "encoder:libmp3lame",
+    "encoder:pcm_s16le",
+    "muxer:mp4",
+    "muxer:flv",
+    "muxer:wav",
+    "filter:aresample",
+)
+# 兼容旧名
+LITE_MARKERS = APP_MARKERS
+
+# 输出格式 → 所需 ffmpeg 能力
 FORMAT_REQUIREMENTS = {
     "mp4": (),
     "flv": ("muxer:flv",),
     "mp3": ("encoder:libmp3lame",),
     "wav": ("encoder:pcm_s16le", "muxer:wav"),
 }
-# 单声道（-ac 1）需要音频重采样滤波器，精简版已禁用全部滤波器
+# 单声道（-ac 1）需要音频重采样滤波器
 MONO_REQUIREMENTS = ("filter:aresample",)
-# “完整版”标记：自动下载替换的目标形态（BtbN gpl 构建全部具备）
+# “完整版”标记：BtbN gpl 构建全部具备（含视频重编码等下载链路用不到的能力）
 FULL_MARKERS = (
     "encoder:libx264",
     "encoder:libmp3lame",
@@ -191,9 +214,35 @@ def get_version() -> str:
 
 
 def is_full() -> bool:
-    """当前 ffmpeg 是否为完整版（具备全部输出能力）"""
+    """当前 ffmpeg 是否为完整版（BtbN gpl 构建，含视频重编码等能力）"""
     caps = get_capabilities()
     return bool(caps) and all(m in caps for m in FULL_MARKERS)
+
+
+def is_ready() -> bool:
+    """当前 ffmpeg 是否具备下载链路所需的全部能力（精简版即可满足）
+
+    与 is_full() 的区别：本函数只关心应用真正用到的能力，自建精简版就能通过；
+    is_full() 额外要求 libx264 等视频重编码能力，用于「升级完整版」入口。
+    """
+    caps = get_capabilities()
+    return bool(caps) and all(m in caps for m in APP_MARKERS)
+
+
+def missing_features() -> list:
+    """当前 ffmpeg 做不到的功能描述（用于提示文案），齐备时返回空列表"""
+    missing = []
+    if not format_supported("mp4"):
+        missing.append("mp4 输出")
+    if not format_supported("flv"):
+        missing.append("flv")
+    if not format_supported("mp3"):
+        missing.append("mp3")
+    if not format_supported("wav"):
+        missing.append("wav")
+    if not mono_supported():
+        missing.append("单声道")
+    return missing
 
 
 def format_supported(fmt: str) -> bool:
@@ -213,19 +262,24 @@ def mono_supported() -> bool:
 def get_status() -> dict:
     """FFmpeg 状态快照（UI 轮询/初始化用）
 
-    status: full / lite / downloading / failed / missing
+    status: full  完整版（BtbN 构建，含视频重编码）
+            ready 精简版但应用所需能力齐备（正常状态）
+            lite  能力不足，部分格式/声道需置灰
+            downloading / failed / missing
     """
     path = get_ffmpeg_path()
     with _state_lock:
         st = dict(_state)
     if st["status"] == "downloading":
         status = "downloading"
-    elif st["status"] == "failed" and not is_full():
+    elif st["status"] == "failed" and not is_ready():
         status = "failed"
     elif not ffmpeg_exists():
         status = "missing"
+    elif is_full():
+        status = "full"
     else:
-        status = "full" if is_full() else "lite"
+        status = "ready" if is_ready() else "lite"
     return {
         "status": status,
         "path": path,
@@ -242,8 +296,65 @@ def prepare() -> None:
     get_capabilities(refresh=True)
 
 
+def ensure_available() -> bool:
+    """确保有一个可用的 FFmpeg（缺失时补精简版，约 6MB）
+
+    与 start_auto_upgrade() 的分工：
+      - 本函数只在**完全没有 ffmpeg** 时动作，且只下精简版
+      - 已有精简版就保持不动，绝不悄悄升级成 161MB 完整版
+    需要完整能力（罕见容器、视频重编码等）时，由用户显式点「升级完整版」。
+    """
+    if ffmpeg_exists():
+        return True
+
+    target = Path(get_ffmpeg_path())
+    resources_dir = Path(system_info.get_default_paths()["resources_dir"])
+    resources_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = resources_dir / ".ffmpeg_lite_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = tmp_dir / "ffmpeg-lite.zip"
+    exe_path = tmp_dir / "ffmpeg.exe"
+
+    last_error = ""
+    try:
+        for url in FFMPEG_LITE_URLS:
+            try:
+                _set("downloading", url=url)
+                logger.info(f"下载精简版 FFmpeg: {url}")
+                _download_zip(url, zip_path)
+                if not _extract_ffmpeg(zip_path, exe_path):
+                    raise RuntimeError("压缩包中未找到 bin/ffmpeg.exe")
+                caps = _probe_capabilities(str(exe_path))
+                missing = [m for m in LITE_MARKERS if m not in caps]
+                if missing:
+                    raise RuntimeError(f"精简版缺少能力: {missing}")
+                _install(exe_path, target)
+                get_capabilities(refresh=True)
+                _set("ok", progress=1.0, error="")
+                signals.capabilities_changed.emit()
+                signals.finished.emit(True, "精简版 FFmpeg 已就绪")
+                logger.success(f"精简版 FFmpeg 已就位: {target}")
+                return True
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"精简版 FFmpeg 下载失败 {url}: {e}")
+                zip_path.unlink(missing_ok=True)
+                exe_path.unlink(missing_ok=True)
+                continue
+        _set("failed", error=last_error)
+        signals.finished.emit(False, last_error)
+        logger.error(f"精简版 FFmpeg 下载失败: {last_error}")
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def start_auto_upgrade() -> bool:
-    """启动时调用：非完整版则后台下载替换；已在下载则忽略"""
+    """显式升级：下载完整版并替换（设置页/首页按钮调用）
+
+    注意：启动流程**不再**调用本函数——精简版已能满足全部下载链路，
+    自动拉 161MB 完整版只会浪费流量。缺少 FFmpeg 时用 ensure_available()。
+    """
     if ffmpeg_exists() and is_full():
         return False
     with _state_lock:
@@ -262,7 +373,12 @@ start_download = start_auto_upgrade
 # ---------------------------------------------------------------- 内部实现
 
 def _probe_version(path: str) -> str:
-    """读取 FFmpeg 版本号，失败返回空串"""
+    """读取 FFmpeg 版本号，失败返回空串
+
+    两种版本串都要能读出人看得懂的部分：
+      官方 BtbN 构建  N-127900-ge2798d5cad  → N-127900
+      自建精简版      git-2026-10-23-abb54ce → 2026-10-23
+    """
     try:
         result = subprocess.run(
             [path, "-version"],
@@ -272,7 +388,15 @@ def _probe_version(path: str) -> str:
             creationflags=_NO_WINDOW,
         )
         match = re.search(r"ffmpeg version (\S+)", result.stdout or "")
-        return match.group(1).split("-")[0] if match else ""
+        if not match:
+            return ""
+        raw = match.group(1)
+        parts = raw.split("-")
+        if raw.startswith("git-") and len(parts) >= 4:
+            return f"{parts[1]}-{parts[2]}-{parts[3]}"
+        if len(parts) >= 2:
+            return f"{parts[0]}-{parts[1]}"
+        return raw
     except Exception:
         return ""
 

@@ -48,45 +48,55 @@ class HomePage(QWidget):
         self._refresh_ffmpeg_state()
 
     def _refresh_ffmpeg_state(self) -> None:
-        """刷新 FFmpeg 卡片：完整版 / 精简版 / 下载中（进度）/ 拉取失败 / 未找到"""
+        """刷新 FFmpeg 卡片：完整版 / 精简版（能力齐备）/ 能力不足 / 下载中 / 拉取失败 / 未找到"""
         state = ffmpeg_manager.get_status()
         status = state["status"]
+        version = state.get("version") or ""
         if status == "full":
             self._ffmpeg_value.setText("已就绪")
             self._set_value_tone(self._ffmpeg_value, "green")
-            version = state.get("version") or ""
             self._ffmpeg_sub.setText(
                 f"FFmpeg {version}（完整版，全部格式可用）" if version else "完整版，全部格式可用"
             )
             self._ffmpeg_download_btn.hide()
-        elif status == "lite":
-            self._ffmpeg_value.setText("精简版")
-            self._set_value_tone(self._ffmpeg_value, "orange")
-            version = state.get("version") or ""
+        elif status == "ready":
+            self._ffmpeg_value.setText("已就绪")
+            self._set_value_tone(self._ffmpeg_value, "green")
             self._ffmpeg_sub.setText(
-                f"FFmpeg {version}（精简版）：flv / wav 与单声道不可用，正在后台下载完整版"
+                f"FFmpeg {version}（精简版 5MB）：重封装与 mp3 / wav 转码均可用"
                 if version else
-                "精简版：flv / wav 与单声道不可用，正在后台下载完整版"
+                "精简版（5MB）：重封装与 mp3 / wav 转码均可用"
             )
-            self._ffmpeg_download_btn.setText("下载完整版")
+            self._ffmpeg_download_btn.setText("升级完整版")
+            self._ffmpeg_download_btn.show()
+        elif status == "lite":
+            self._ffmpeg_value.setText("能力不足")
+            self._set_value_tone(self._ffmpeg_value, "orange")
+            feats = ffmpeg_manager.missing_features()
+            detail = " / ".join(feats) if feats else "部分能力"
+            self._ffmpeg_sub.setText(
+                f"FFmpeg {version}：{detail} 不可用，可在设置页升级完整版"
+                if version else f"{detail} 不可用，可在设置页升级完整版"
+            )
+            self._ffmpeg_download_btn.setText("升级完整版")
             self._ffmpeg_download_btn.show()
         elif status == "downloading":
             percent = int(state["progress"] * 100)
             self._ffmpeg_value.setText(f"下载中 {percent}%")
             self._set_value_tone(self._ffmpeg_value, "brand")
-            self._ffmpeg_sub.setText("正在自动拉取完整版 FFmpeg（约 80MB），完成后自动替换")
+            self._ffmpeg_sub.setText("正在下载 FFmpeg…")
             self._ffmpeg_download_btn.hide()
         elif status == "failed":
             self._ffmpeg_value.setText("拉取失败")
             self._set_value_tone(self._ffmpeg_value, "red")
-            self._ffmpeg_sub.setText("自动下载失败，可重试，或手动下载后放入 resources 目录")
+            self._ffmpeg_sub.setText("下载失败，可重试，或手动放入 resources 目录")
             self._ffmpeg_download_btn.setText("重试下载")
             self._ffmpeg_download_btn.show()
         else:  # missing
             self._ffmpeg_value.setText("未找到")
             self._set_value_tone(self._ffmpeg_value, "red")
-            self._ffmpeg_sub.setText("首次使用将自动下载完整版，也可手动放入 resources 目录")
-            self._ffmpeg_download_btn.setText("下载完整版")
+            self._ffmpeg_sub.setText("首次使用会自动下载精简版（约 5MB），也可手动放入 resources 目录")
+            self._ffmpeg_download_btn.setText("下载 FFmpeg")
             self._ffmpeg_download_btn.show()
 
     # ---------------------------------------------------------------- 引擎
@@ -135,9 +145,8 @@ class HomePage(QWidget):
         self._backend_line.setText(f"后端路由: {backend_text}")
 
         state = ffmpeg_manager.get_status()
-        label = {"full": "完整版", "lite": "精简版", "missing": "未找到"}.get(
-            state["status"], state["status"]
-        )
+        label = {"full": "完整版", "ready": "精简版", "lite": "能力不足",
+                 "missing": "未找到"}.get(state["status"], state["status"])
         self._ffmpeg_line.setText(f"FFmpeg: {label}")
 
         try:

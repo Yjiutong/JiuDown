@@ -817,7 +817,7 @@ class DownloadPage(QWidget):
     # ---------------------------------------------------------------- ffmpeg 能力门控
 
     def _apply_format_gating(self) -> None:
-        """按当前 ffmpeg 能力禁用不可用格式（精简版无 flv/wav 封装器）"""
+        """按当前 ffmpeg 能力禁用不可用格式（能力不足时置灰）"""
         model = self.format_select.model()
         for i in range(self.format_select.count()):
             fmt = self.format_select.itemText(i)
@@ -834,7 +834,7 @@ class DownloadPage(QWidget):
                 )
         current = self.format_select.currentText()
         if not ffmpeg_manager.format_supported(current):
-            # 当前所选格式不可用（如默认格式是 flv/wav 而 ffmpeg 为精简版）时回退
+            # 当前所选格式不可用时回退
             fallback = config_manager.get_default_format()
             if not ffmpeg_manager.format_supported(fallback):
                 fallback = "mp4"
@@ -849,7 +849,7 @@ class DownloadPage(QWidget):
             self._forced_fallback = False
 
     def _apply_quality_gating(self) -> None:
-        """纯音频格式下按 ffmpeg 能力禁用单声道（精简版缺重采样滤波器）"""
+        """纯音频格式下按 ffmpeg 能力禁用单声道（缺重采样滤波器时降级双声道）"""
         if self.format_select.currentText() not in AUDIO_FORMATS:
             return
         model = self.quality_select.model()
@@ -897,14 +897,17 @@ class DownloadPage(QWidget):
             self.ffmpeg_notice_retry.show()
             self.ffmpeg_notice.show()
         elif status == "lite":
+            feats = ffmpeg_manager.missing_features()
+            detail = " / ".join(feats) if feats else "部分能力"
             self.ffmpeg_notice_text.setText(
-                "当前为精简版 FFmpeg：flv / wav 与单声道不可用"
+                f"当前 FFmpeg 能力不足：{detail} 不可用，可在设置页升级完整版"
             )
             self.ffmpeg_notice_bar.setValue(0)
             self.ffmpeg_notice_retry.show()
             self.ffmpeg_notice.show()
         else:
-            # full / missing：missing 时首页状态卡负责提示，此处不占位
+            # full / ready / missing：ready 即能力齐备无需提示；
+            # missing 时首页状态卡负责提示，此处不占位
             self.ffmpeg_notice.hide()
 
     def _build_ffmpeg_notice(self) -> QFrame:
