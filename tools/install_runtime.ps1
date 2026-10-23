@@ -1,4 +1,4 @@
-﻿﻿# JiuDown 首次安装（组件优先，离线可用）
+﻿# JiuDown 首次安装（组件优先，离线可用）
 #
 # 组件包随仓库一起分发在 build_components/，所以克隆下来**断网也能装好**：
 #   1) 优先用本地 build_components/manifest.json + 各组件 zip
@@ -52,20 +52,24 @@ function Install-Components($manifest, [bool]$fromLocal) {
         $sizeMb = [math]::Round($c.size / 1MB, 1)
         Write-Host ("[{0}/{1}] {2}  {3} MB" -f $idx, $names.Count, $c.file, $sizeMb)
 
-        $zip = Join-Path $localDir $c.file
-        if (-not ((Test-Path $zip) -and (Test-Checksum $zip $c.sha256))) {
-            if (Test-Path $zip) { Write-Host "  [i] local copy stale, fetching from release" }
+        $localZip = Join-Path $localDir $c.file
+        $zip = $localZip
+        $downloaded = $false
+        if (-not ((Test-Path $localZip) -and (Test-Checksum $localZip $c.sha256))) {
+            if (Test-Path $localZip) { Write-Host "  [i] local copy unusable, fetching from release" }
             $zip = Join-Path $env:TEMP $c.file
             Invoke-WebRequest -Uri "$base/$($c.file)" -OutFile $zip -UseBasicParsing
+            $downloaded = $true
         }
 
         if (-not (Test-Checksum $zip $c.sha256)) {
-            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            if ($downloaded) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
             throw "Checksum mismatch: $($c.file)"
         }
 
         Expand-Archive -Path $zip -DestinationPath $runtime -Force
-        if ($zip.StartsWith($env:TEMP)) { Remove-Item $zip -Force }
+        # 只删自己下载的临时包；仓库里随附的那份必须留着（否则下次克隆/重装就废了）
+        if ($downloaded) { Remove-Item $zip -Force }
     }
 }
 
