@@ -265,6 +265,8 @@ class TagCard(QFrame):
         self.file_format = file_format
         self.levels: list[dict] = []
         self.level: dict | None = None
+        self.kind = ""                  # "" = 普通视频，"note" = 抖音图文
+        self.image_count = 0
         self.state = "parsing"          # parsing / ready / failed
         self.error = ""
         self._hover_timer: QTimer | None = None
@@ -315,12 +317,20 @@ class TagCard(QFrame):
         self.state = "ready"
         self.title = str(info.get("title") or "")
         self.levels = list(info.get("levels") or [])
+        self.kind = str(info.get("kind") or "")
+        self.image_count = int(info.get("image_count") or 0)
         self.title_label.setText(self.title or self.url)
         if self.file_format not in AUDIO_FORMATS:
             self.select_level(pick_default_level(self.levels, tier))
+        if self.kind == "note":
+            # 图文没有码流：徽章报张数，报"720P/mp4"会让人以为下到了视频
+            self.format_badge.setText("图文")
+            self.quality_badge.setText(f"{self.image_count} 张原图")
         self.detail_label.setText(self._levels_summary())
 
     def _levels_summary(self) -> str:
+        if self.kind == "note":
+            return f"抖音图文：{self.image_count} 张无水印原图，下载后保存在同一个文件夹"
         if not self.levels:
             return "该链接没有可选的清晰度档位（按默认档位下载）"
         shown_levels = _selectable_levels(self.levels)
@@ -378,7 +388,10 @@ class TagCard(QFrame):
         super().mouseDoubleClickEvent(event)
 
     def enterEvent(self, event) -> None:
-        """悬停 0.5 秒后请求弹出低清小窗预览"""
+        """悬停 0.5 秒后请求弹出低清小窗预览（图文没有码流，不弹）"""
+        if self.kind == "note":
+            super().enterEvent(event)
+            return
         if self._hover_timer is None:
             self._hover_timer = QTimer(self)
             self._hover_timer.setSingleShot(True)
@@ -399,50 +412,60 @@ class TagCard(QFrame):
         # 挂到顶层窗口而不是标签卡本身：QMenu 是独立弹出窗口，若父链上有控件级
         # setStyleSheet（裸声明会级联），菜单背景会被覆盖成透明 → 黑底看不清字
         menu = QMenu(self.window())
-        fmt_menu = menu.addMenu(f"格式: {self.file_format}")
-        fmt_group = QActionGroup(menu)
-        fmt_group.setExclusive(True)
-        for f in FORMATS:
-            act = QAction(f, menu)
-            act.setCheckable(True)
-            act.setChecked(f == self.file_format)
-            act.triggered.connect(lambda _=False, f=f: self.set_format(f))
-            # 当前 ffmpeg 做不到的格式置灰（如精简版的 flv / wav）
-            if not ffmpeg_manager.format_supported(f):
-                act.setEnabled(False)
-                act.setToolTip("当前 FFmpeg 无法输出该格式（完整版就绪后可用）")
-            fmt_group.addAction(act)
-            fmt_menu.addAction(act)
-
-        if self.file_format in AUDIO_FORMATS:
-            param_menu = menu.addMenu(f"声道: {self.quality}")
-            param_group = QActionGroup(menu)
-            param_group.setExclusive(True)
-            mono_ok = ffmpeg_manager.mono_supported()
-            for channel in CHANNELS:
-                act = QAction(channel, menu)
-                act.setCheckable(True)
-                act.setChecked(channel == self.quality)
-                act.triggered.connect(lambda _=False, c=channel: self.choose_channel(c))
-                if channel == "单声道" and not mono_ok:
-                    act.setEnabled(False)
-                    act.setToolTip("当前 FFmpeg 不支持单声道重采样")
-                param_group.addAction(act)
-                param_menu.addAction(act)
+        if self.kind == "note":
+            # 图文只有原图：格式/清晰度都无从选择，列出可选项只会误导
+            info_act = QAction(f"抖音图文：{self.image_count} 张无水印原图", menu)
+            info_act.setEnabled(False)
+            menu.addAction(info_act)
+            menu.addSeparator()
         else:
-            menu.addAction(self._build_quality_menu(menu))
+            fmt_menu = menu.addMenu(f"格式: {self.file_format}")
+            fmt_group = QActionGroup(menu)
+            fmt_group.setExclusive(True)
+            for f in FORMATS:
+                act = QAction(f, menu)
+                act.setCheckable(True)
+                act.setChecked(f == self.file_format)
+                act.triggered.connect(lambda _=False, f=f: self.set_format(f))
+                # 当前 ffmpeg 做不到的格式置灰（如精简版的 flv / wav）
+                if not ffmpeg_manager.format_supported(f):
+                    act.setEnabled(False)
+                    act.setToolTip("当前 FFmpeg 无法输出该格式（完整版就绪后可用）")
+                fmt_group.addAction(act)
+                fmt_menu.addAction(act)
+
+            if self.file_format in AUDIO_FORMATS:
+                param_menu = menu.addMenu(f"声道: {self.quality}")
+                param_group = QActionGroup(menu)
+                param_group.setExclusive(True)
+                mono_ok = ffmpeg_manager.mono_supported()
+                for channel in CHANNELS:
+                    act = QAction(channel, menu)
+                    act.setCheckable(True)
+                    act.setChecked(channel == self.quality)
+                    act.triggered.connect(lambda _=False, c=channel: self.choose_channel(c))
+                    if channel == "单声道" and not mono_ok:
+                        act.setEnabled(False)
+                        act.setToolTip("当前 FFmpeg 不支持单声道重采样")
+                    param_group.addAction(act)
+                    param_menu.addAction(act)
+            else:
+                menu.addAction(self._build_quality_menu(menu))
 
         menu.addSeparator()
         link_act = QAction("查看链接", menu)
         link_act.triggered.connect(self._show_link)
         menu.addAction(link_act)
         if self.state != "parsing":
-            again_act = QAction("重新解析档位", menu)
+            label = "重新解析" if self.kind == "note" else "重新解析档位"
+            again_act = QAction(label, menu)
             again_act.triggered.connect(lambda: self.reparse_requested.emit(self.url))
             menu.addAction(again_act)
-        preview_act = QAction("预览", menu)
-        preview_act.triggered.connect(lambda: self.preview_requested.emit(self.url))
-        menu.addAction(preview_act)
+        if self.kind != "note":
+            # 图文没有码流，预览面板拿不到可播的直链
+            preview_act = QAction("预览", menu)
+            preview_act.triggered.connect(lambda: self.preview_requested.emit(self.url))
+            menu.addAction(preview_act)
         delete_act = QAction("删除", menu)
         delete_act.triggered.connect(lambda: self.delete_requested.emit(self.url))
         menu.addAction(delete_act)
@@ -634,6 +657,10 @@ class TaskCard(QFrame):
             self.format_combo.setCurrentText(fmt)
         self.format_combo.blockSignals(False)
         self._sync_quality_items(keep=quality)
+        # 抖音图文只有原图，格式/清晰度下拉会误导，直接收掉
+        is_note = task.get("kind") == "note"
+        self.format_combo.setVisible(not is_note)
+        self.quality_combo.setVisible(not is_note)
 
         status = task.get("status", "queued")
         tone, text = STATUS_BADGE.get(status, ("gray", status))
@@ -649,6 +676,8 @@ class TaskCard(QFrame):
         meta_bits = []
         if task.get("extractor"):
             meta_bits.append(str(task["extractor"]))
+        if task.get("kind") == "note":
+            meta_bits.append(f"图文 {int(task.get("image_count") or 0)} 张")
         if task.get("duration"):
             meta_bits.append(download_manager.format_duration(task["duration"]))
         if int(task.get("playlist_count") or 0) > 1:
@@ -777,7 +806,7 @@ class DownloadPage(QWidget):
         self.url_input = UrlInputEdit()
         self.url_input.setPlaceholderText(
             "每行一个链接（支持 B 站 / YouTube / 抖音 等 1000+ 站点）\n"
-            "回车生成链接卡片（解析标题与该视频的清晰度），Shift+回车换行"
+            "回车生成链接卡片（解析标题与该链接实际可下的档位），Shift+回车换行"
         )
         # 固定输入框高度，避免其 Expanding 策略在滚动容器中撑开卡片
         self.url_input.setFixedHeight(72)
@@ -820,7 +849,7 @@ class DownloadPage(QWidget):
 
         # ---- 待下载标签区（回车生成的标签卡，参数各自独立快照） ----
         self.tag_hint = QLabel(
-            "回车生成链接卡片：自动解析标题，清晰度只列该视频真正提供的档位；"
+            "回车生成链接卡片：自动解析标题，清晰度只列该链接真正提供的档位（抖音图文按原图整组下载）；"
             "右键可查看原链接，双击恢复文本"
         )
         self.tag_hint.setProperty("muted", True)
@@ -886,7 +915,7 @@ class DownloadPage(QWidget):
         empty_title.setProperty("cssClass", "emptyTitle")
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_hint = QLabel(
-            "粘贴视频链接后回车生成链接卡片，卡片会自动解析标题与该视频提供的清晰度；"
+            "粘贴视频或抖音图文链接后回车生成链接卡片，卡片会自动解析标题与该链接实际可下的档位；"
             "点击“开始下载”加入队列，悬停卡片可预览低清画面"
         )
         empty_hint.setProperty("cssClass", "emptyHint")
@@ -1097,7 +1126,7 @@ class DownloadPage(QWidget):
             )
         else:
             self._set_hint(
-                "回车生成链接卡片：自动解析标题，清晰度只列该视频真正提供的档位；"
+                "回车生成链接卡片：自动解析标题，清晰度只列该链接真正提供的档位（抖音图文按原图整组下载）；"
                 "右键可查看原链接，双击恢复文本"
             )
 
@@ -1345,7 +1374,7 @@ class DownloadPage(QWidget):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(self, "提示", "文件尚未生成")
             return
-        folder = str(Path(output_path).parent)
+        folder = output_path if Path(output_path).is_dir() else str(Path(output_path).parent)
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _preview_task_click(self, task_id: str) -> None:
@@ -1367,6 +1396,12 @@ class DownloadPage(QWidget):
 
         task = download_manager.get_task(task_id) or {}
         output_path = task.get("output_path", "")
+        if output_path and Path(output_path).is_dir():
+            # 图文产物是原图文件夹，媒体播放器放不了，直接交回资源管理器
+            self.preview_panel._show_loading(
+                f"图文原图已保存在：\n{output_path}"
+            )
+            return
         if output_path and Path(output_path).exists():
             self.preview_panel.play_local_file(output_path)
             return

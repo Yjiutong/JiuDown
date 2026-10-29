@@ -384,6 +384,8 @@ class DownloadManager:
                 "duration": info.get("duration") or 0,
                 "thumbnail": info.get("thumbnail") or "",
                 "playlist_count": info.get("playlist_count") or 0,
+                "kind": info.get("kind") or "",
+                "image_count": info.get("image_count") or 0,
                 "status": "downloading",
                 "message": f"正在下载: {info.get('title') or url} [{quality}]",
             })

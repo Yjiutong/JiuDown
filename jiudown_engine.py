@@ -1,7 +1,7 @@
 """
 JiuDown 下载引擎（自有引擎层）
 
-由我们自己维护的统一下载引擎，内部是「双后端」结构：
+由我们自己维护的统一下载引擎，内部是「三后端」结构：
 
   后端 native —— 原生 B 站链路（本项目自研，不依赖第三方提取器）
       · api.bilibili.com/wbi 接口直连解析，buvid Cookie 播种 + 登录 Cookie 注入
@@ -9,13 +9,17 @@ JiuDown 下载引擎（自有引擎层）
       · FFmpeg 合并与音频转码（mp3 / wav / flv）
       · 优点：解析快、字段可控；B 站接口或清晰度规则变化时我们自己改
 
+  后端 douyin —— 抖音图文（图集），见 douyin_engine
+      · yt-dlp 的 DouyinIE 只认 /video/，图文一律 Unsupported URL，这条链路非做不可
+      · 产物是一个装无水印原图的文件夹，不是单个媒体文件
+
   后端 yt-dlp —— 通用站点（1700+）
-      · B 站以外的全部站点，以及 native 后端失败时的兜底
+      · 其余全部站点，以及 native / douyin 失败时的兜底
 
 路由策略（配置项 engine.backend）：
-  auto（默认）：B 站链接先走 native，失败自动降级 yt-dlp；其他站点走 yt-dlp
-  native      ：强制 native（仅 B 站有效，其他链接仍走 yt-dlp）
-  ytdlp       ：全部走 yt-dlp（保留给原生链路出问题时的应急开关）
+  auto（默认）：B 站先 native、抖音图文先 douyin，失败自动降级 yt-dlp；其他站点走 yt-dlp
+  native      ：同 auto（两个自研后端各自只认领自己的站点）
+  ytdlp       ：应急开关，优先 yt-dlp；抖音图文仍由 douyin 兜底，因为 yt-dlp 不支持
 
 对外只暴露三类能力（与站点无关）：
   probe(url)                  解析元数据
@@ -34,6 +38,7 @@ from typing import Callable, Optional
 import requests
 from loguru import logger
 
+import douyin_engine
 import ytdlp_engine
 from ytdlp_engine import (  # 统一常量与工具（避免 UI 层出现两套定义）
     AUDIO_FORMATS,
@@ -654,10 +659,11 @@ class NativeBilibiliBackend:
 
 
 class JiuDownEngine:
-    """自有下载引擎：native（B 站）+ yt-dlp（通用），统一对外"""
+    """自有下载引擎：native（B 站）+ douyin（抖音图文）+ yt-dlp（通用），统一对外"""
 
     def __init__(self):
         self.native = NativeBilibiliBackend()
+        self.douyin = douyin_engine.douyin_engine
 
     # ---------------------------------------------------------------- 状态
 
@@ -713,11 +719,20 @@ class JiuDownEngine:
         is_bili = self.native.matches(target)
         mode = self.mode()
         if mode == "ytdlp":
-            return ["ytdlp"]
-        if mode == "native":
-            return ["native", "ytdlp"] if is_bili else ["ytdlp"]
-        # auto
-        return ["native", "ytdlp"] if is_bili else ["ytdlp"]
+            # yt-dlp 完全不支持抖音图文，图文始终留给 douyin 后端兜底
+            if douyin_engine.is_note_url(target):
+                return ["douyin"]
+            return ["ytdlp", "douyin"] if douyin_engine.matches(target) else ["ytdlp"]
+        # native 模式与 auto 同样处理：B 站优先自研，抖音图文优先自研
+        if is_bili:
+            return ["native", "ytdlp"]
+        if douyin_engine.is_note_url(target):
+            return ["douyin", "ytdlp"]
+        if douyin_engine.matches(target):
+            # 抖音视频仍由 yt-dlp 负责；短链要等 yt-dlp 失败后才解析一次，
+            # 判断它是不是被重定向到图文的短链
+            return ["ytdlp", "douyin"]
+        return ["ytdlp"]
 
     def backend_for(self, url: str) -> str:
         return self._plan(url)[0]
@@ -733,7 +748,11 @@ class JiuDownEngine:
             try:
                 if backend == "native":
                     return self.native.probe(target)
+                if backend == "douyin":
+                    return self.douyin.probe(target)
                 return ytdlp_engine.probe(target)
+            except douyin_engine.NotHandled:
+                logger.debug(f"[引擎] {backend} 不负责该链接，交给下一后端")
             except Exception as e:
                 errors.append(f"{backend}: {e}")
                 logger.debug(f"[引擎] {backend} 解析失败，尝试下一后端: {e}")
@@ -749,7 +768,11 @@ class JiuDownEngine:
             try:
                 if backend == "native":
                     return self.native.list_levels(target)
+                if backend == "douyin":
+                    return self.douyin.list_levels(target)
                 return ytdlp_engine.list_levels(target)
+            except douyin_engine.NotHandled:
+                logger.debug(f"[引擎] {backend} 不负责该链接，交给下一后端")
             except Exception as e:
                 errors.append(f"{backend}: {e}")
                 logger.debug(f"[引擎] {backend} 档位解析失败，尝试下一后端: {e}")
@@ -781,6 +804,13 @@ class JiuDownEngine:
                         progress_hook=progress_hook,
                         postprocessor_hook=postprocessor_hook,
                     )
+                elif backend == "douyin":
+                    result = self.douyin.download(
+                        target, quality=quality, file_format=file_format, level=level,
+                        out_dir=out_dir, temp_dir=temp_dir, channels=channels,
+                        progress_hook=progress_hook,
+                        postprocessor_hook=postprocessor_hook,
+                    )
                 else:
                     result = ytdlp_engine.download(
                         target, quality=quality, file_format=file_format, level=level,
@@ -790,6 +820,8 @@ class JiuDownEngine:
                     )
                 result["backend"] = backend
                 return result
+            except douyin_engine.NotHandled:
+                logger.debug(f"[引擎] {backend} 不负责该链接，交给下一后端")
             except Exception as e:
                 errors.append(f"{backend}: {e}")
                 logger.warning(f"[引擎] {backend} 下载失败，尝试下一后端: {e}")
@@ -822,7 +854,7 @@ def _merge_errors(errors: list[str]) -> str:
     if not errors:
         return "下载失败"
     text = errors[-1]
-    text = re.sub(r"^(native|ytdlp):\s*", "", text)
+    text = re.sub(r"^(native|ytdlp|douyin):\s*", "", text)
     return text
 
 

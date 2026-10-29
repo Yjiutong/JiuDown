@@ -4,7 +4,7 @@ JiuDown 桌面版（玖号下载器） - 自研双引擎（原生 B 站 + yt-dlp
 
 ## 项目简介
 
-JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下载桌面应用，使用自研的 **JiuDown 引擎**（双后端架构）：B 站走原生链路（接口直连 + DASH 分片 + FFmpeg 合并，由本项目自己维护），其余 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 支持的 1700+ 站点（YouTube、抖音、Vimeo、X 等）由通用后端处理，任一后端失败会自动降级到另一个。界面采用 PySide6（Qt）构建，提供与 Apple HIG 一致的原生桌面体验。
+JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下载桌面应用，使用自研的 **JiuDown 引擎**（三后端架构）：B 站走原生链路（接口直连 + DASH 分片 + FFmpeg 合并，由本项目自己维护），抖音图文走原生图集链路（yt-dlp 不认这条形态），其余 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 支持的 1700+ 站点（YouTube、抖音视频、Vimeo、X 等）由通用后端处理，任一后端失败会自动降级到另一个。界面采用 PySide6（Qt）构建，提供与 Apple HIG 一致的原生桌面体验。
 
 本项目 **fork 自开源项目 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（唧唧下载器桌面版）**，并在此基础上修改完善，包括界面重构、架构升级与功能增强。
 
@@ -12,7 +12,7 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 
 本项目 fork 自 [JiJiDownForDesktop](https://github.com/o5-null/JiJiDownForDesktop)（原项目：JiJiDown Desktop，唧唧下载器桌面版，作者 o5-null），并在其基础上修改完善：
 
-- **下载引擎**：自研 **JiuDown 引擎**（`jiudown_engine.py`）——B 站走原生链路（原核心逻辑重写为进程内 Python 实现，清晰度映射/风控 Cookie/分片下载全部自己维护），其他站点走 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 通用后端，双后端自动降级
+- **下载引擎**：自研 **JiuDown 引擎**（`jiudown_engine.py`）——B 站走原生链路（原核心逻辑重写为进程内 Python 实现，清晰度映射/风控 Cookie/分片下载全部自己维护），抖音图文走原生图集链路（`douyin_engine.py`），其他站点走 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 通用后端，多后端自动降级
 - **界面重构**：由原始 NiceGUI Web 界面重构为 PySide6 (Qt) 原生桌面应用
 - **架构升级**：新增 asyncio 后台线程桥、模块化页面结构、QSS 统一设计规范
 - **功能完善**：多任务并发调度、断点续传、批量下载、状态监控、日志管理等
@@ -22,8 +22,8 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 ## 功能特性
 
 ### 核心功能
-- 🌐 **双引擎全站支持**：B 站走自研原生链路（解析快、字段可控），YouTube/抖音/Vimeo/X 等 1700+ 站点走 yt-dlp 通用后端
-- 🔀 **自动降级**：B 站原生链路失败时自动切到 yt-dlp，反之亦然，单站点故障不影响整体可用性
+- 🌐 **三引擎全站支持**：B 站与抖音图文走自研原生链路（解析快、字段可控），YouTube/抖音视频/Vimeo/X 等 1700+ 站点走 yt-dlp 通用后端
+- 🔀 **自动降级**：原生链路失败时自动切到 yt-dlp，反之亦然；后端主动「不认领」某形态时直接让路，不会把内部原因报给用户
 - 🎚️ **按视频实际提供的清晰度选档**：链接卡片解析出该视频真实存在的档位再让人选（老片没有 1080P 就不出现 1080P，B 站 1080P 高码率 / 4K / 60帧 这类档也能选到），mp4 / flv / mp3 / wav 四种输出
 - 🍪 **登录内容**：可直接读取 Chrome / Edge / Firefox 等浏览器的 Cookie，下载会员/私享内容
 - 📝 **可读错误**：站点风控、需登录、链接不支持等情况翻译成一句中文提示，不抛原始堆栈
@@ -217,6 +217,7 @@ innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tool
 | `verify_engine.py` / `verify_ytdlp.py` / `verify_wav.py` | 双后端路由与降级、进度回调、纯音频只取音频流 |
 | `verify_ffmpeg.py` / `verify_gating.py` | FFmpeg 能力探测与 UI 门控（含系统 PATH 侦测） |
 | `verify_url_input.py` | 粘贴链接的健壮性（零宽字符/BOM/标题前缀/分享尾巴）与出错必须可见 |
+| `verify_douyin_note.py` | 抖音图文：形态识别与路由顺序、无水印原图挑选与逐张候选重试、多图落盘、卡片张数呈现 |
 | `verify_install_mode.py` / `check_installed_mode.py` | 便携 / 安装两种形态的数据目录推导与恢复 |
 
 这些脚本一律**由自身位置推导仓库根**，不写死任何绝对路径，可从任意目录调用。
@@ -246,7 +247,8 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 ├── main_window.py             # 主窗口（侧边导航 + 页面栈 + 托盘）
 ├── theme.py                   # 主题令牌与 QSS（Apple HIG，双主题）
 ├── async_bridge.py            # asyncio 后台线程桥（下载调度）
-├── jiudown_engine.py          # JiuDown 引擎：双后端路由 + 原生 B 站链路
+├── jiudown_engine.py          # JiuDown 引擎：多后端路由门面 + 原生 B 站链路
+├── douyin_engine.py           # 原生抖音图文链路（图集 → 无水印原图文件夹）
 ├── ytdlp_engine.py            # yt-dlp 通用后端（解析 / 下载 / 预览直链）
 ├── download_manager.py        # 下载任务队列与并发调度
 ├── ffmpeg_manager.py          # FFmpeg 探测 / 下载 / 能力缓存
@@ -305,7 +307,7 @@ asyncio 后台线程桥，让基于 asyncio 的下载调度与 Qt 事件循环�
 - 支持YAML配置文件
 
 ### jiudown_engine.py / ytdlp_engine.py
-下载引擎层。`jiudown_engine` 是统一门面（双后端路由 + 原生 B 站链路），
+下载引擎层。`jiudown_engine` 是统一门面（多后端路由 + 原生 B 站链路），`douyin_engine` 是原生抖音图文链路（yt-dlp 不认 `/note/` 形态），
 `ytdlp_engine` 是通用后端（1700+ 站点）与各类共享工具（URL 规范化、画质→格式映射、
 FFmpeg 转码、错误中文化）。
 
@@ -521,10 +523,17 @@ python -m pdb main.py
 ## 更新日志
 
 ### v1.1.0 (2026-10-29)
+- ✅ **抖音图文（图集）可下载**：新增 `douyin` 原生后端。yt-dlp 的 `DouyinIE` 只认
+  `/video/`，抖音图文形态（`/note/`）一律被判 `Unsupported URL`，此前该类链接全量失败。
+  现在先用移动端 UA 领一个匿名 `ttwid`，再读 iesdouyin 图文分享页的服务端数据拿图集，
+  产物是**按「标题 [作品号]」归档的无水印原图文件夹**（`download_url_list` 是带作者水印的
+  版本，不取）；短链 `v.douyin.com` 由 yt-dlp 失败后再解析一次判定形态，图文与视频互不影响
 - ✅ **按视频实际提供的档位选清晰度**：回车生成链接卡片，后台解析出标题与该视频真实存在的
   清晰度档位再供选择；卡片主文字改为标题，原链接在右键「查看链接」里查看与复制
 - ✅ **高码率档可选**：B 站按 qn 精确选流（1080P 与 1080P 高码率不再混为一谈），
   yt-dlp 侧按「同分辨率取最高码率」枚举，档位名新增 4K / 2K / 60帧 / HDR
+- ✅ **取不到的档位不再出现**：接口声明了但当前账号拿不到的（B 站未登录时的高码率/4K）
+  直接从选择器里隐藏，只在卡片概览报一句"另有 K 档当前账号取不到"，不给人点不动的选项
 - ✅ **不再静默降档**：选中某档后两后端都给不到就明确报错；默认档位作为上限自动钳制
 - ✅ **彻底可移植**：配置里落在程序目录内的路径统一存 `${APP_ROOT}/...`，程序根目录只有一处
   推导，默认值不再按当前工作目录解析，陈旧绝对路径启动时自愈
