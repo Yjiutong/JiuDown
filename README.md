@@ -24,7 +24,7 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 ### 核心功能
 - 🌐 **双引擎全站支持**：B 站走自研原生链路（解析快、字段可控），YouTube/抖音/Vimeo/X 等 1700+ 站点走 yt-dlp 通用后端
 - 🔀 **自动降级**：B 站原生链路失败时自动切到 yt-dlp，反之亦然，单站点故障不影响整体可用性
-- 🎚️ **画质与格式**：最高 / 1080P / 720P / 480P / 360P 五档，mp4 / flv / mp3 / wav 四种输出
+- 🎚️ **按视频实际提供的清晰度选档**：链接卡片解析出该视频真实存在的档位再让人选（老片没有 1080P 就不出现 1080P，B 站 1080P 高码率 / 4K / 60帧 这类档也能选到），mp4 / flv / mp3 / wav 四种输出
 - 🍪 **登录内容**：可直接读取 Chrome / Edge / Firefox 等浏览器的 Cookie，下载会员/私享内容
 - 📝 **可读错误**：站点风控、需登录、链接不支持等情况翻译成一句中文提示，不抛原始堆栈
 - 🔄 **引擎可更新**：站点改版导致解析失败时，一键更新 yt-dlp 即可恢复
@@ -42,7 +42,7 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 - 🔧 **灵活配置**：下载目录、临时目录、代理、Cookie 来源、限速、并发均可配置
 - 📝 **详细日志**：运行日志与下载记录双面板，彩色分级、可打开日志目录
 - 🎬 **在线预览**：悬停标签播放低清流，任务卡内嵌播放器可看在线/本地
-- 🔄 **自动更新**：FFmpeg 缺失自动补精简版，yt-dlp 引擎一键增量升级
+- 🔄 **自动更新**：FFmpeg 缺失时先看系统 PATH 有没有能用的，有就直接用、不再下载；没有才补精简版。yt-dlp 引擎一键增量升级
 
 ## 系统要求
 
@@ -72,7 +72,7 @@ Release 上提供两个**内容完全一致**、只是形态不同的包（由 `
 | 产物 | 大小 | 适合谁 | 说明 |
 |---|---|---|---|
 | `JiuDown-Portable-<版本>.zip` | 约 110MB | 想解压就用、放 U 盘随身携带 | 解压到任意目录 → 双击 `启动.vbs`。配置/下载/日志全在该目录里，整个目录拷走即迁移，删目录即卸载 |
-| `JiuDown-Setup-<版本>.exe` | 约 73MB | 想正规安装、要有开始菜单和卸载项 | 装到 `Program Files`，开始菜单/桌面快捷方式、控制面板卸载项齐全 |
+| `JiuDown-Setup-<版本>.exe` | 约 74MB | 想正规安装、要有开始菜单和卸载项 | 装到 `Program Files`，开始菜单/桌面快捷方式、控制面板卸载项齐全 |
 
 两者都自带完整的离线运行环境（Python 3.12 + PySide6 + yt-dlp + 精简版 FFmpeg），
 **装完断网也能用**。
@@ -116,7 +116,7 @@ python app.py
 |---|---|---|
 | `runtime/` | 按组件清单把仓库内 `build_components/` 的组件包解压到 `runtime\`（**离线即可**） | 本仓库（随代码分发） |
 | 运行时里的 `yt-dlp` 后端 | 随 `engine.zip` 组件一起下发，**不走 PyPI** | 同上 |
-| `ffmpeg.exe` | 从仓库内 `build_components/ffmpeg-lite.zip` 取出精简版（5.3MB，覆盖全部下载场景） | 同上 |
+| `ffmpeg.exe` | 先认程序自带；自带缺失且系统 PATH 上有能力齐备的 ffmpeg 时**直接采用、不下载**；否则从仓库内 `ffmpeg-lite.zip` 取出精简版（5.3MB，覆盖全部下载场景） | 本机 / 同上 |
 | `config/`、`Download/`、`logs/` | 启动时按程序所在目录自动创建 | 本地 |
 
 > **克隆即用，不依赖 Release**：所有必需依赖都作为组件包随仓库分发（合计约 103MB，
@@ -145,8 +145,12 @@ python app.py
 合计约 **103MB**（原整包 339MB），**全部随仓库分发**：`build_components/` 目录已入库
 （`.gitignore` 为它开了 `*.zip` 例外），克隆下来就有，断网也能完成首次安装。
 
-`ffmpeg.exe` 不进 runtime 组件，由 `ffmpeg_manager` 独立管理：优先用仓库内
-`ffmpeg-lite.zip` 就地解压，需要视频重编码等能力时可在设置页显式升级到完整版（约 161MB）。
+`ffmpeg.exe` 不进 runtime 组件，由 `ffmpeg_manager` 独立管理。查找顺序是
+**用户数据目录升级副本 → `runtime/` → 内置 `resources/` → 系统 PATH**：前三项都在程序目录内
+（保证整个文件夹可移植），最后一项只是兜底 —— 机器上本来就有 ffmpeg 时就不再下载补齐。
+采用 PATH 上的那份前会实测它具备 mp3/wav 编码、flv 重封装与 `aresample` 滤波器，
+避免 Windows「应用执行别名」那种 0 字节占位 exe 或过老的构建被误当可用。
+需要视频重编码等能力时可在设置页显式升级到完整版（约 161MB）。
 
 **带来的实际收益**
 
@@ -181,7 +185,7 @@ runtime\python\python.exe tools/build_release.py --version 1.1.0
 | 文件 | 说明 |
 |---|---|
 | `JiuDown-Portable-<版本>.zip` | 约 110MB，解压即用 |
-| `JiuDown-Setup-<版本>.exe` | 约 73MB，Inno Setup 安装程序 |
+| `JiuDown-Setup-<版本>.exe` | 约 74MB，Inno Setup 安装程序 |
 | `SHA256SUMS.txt` | 两个产物的校验值 |
 
 两个包装的内容完全一致：源码 + `runtime\` + `resources\`（含 FFmpeg）+ `build_components\`
@@ -199,7 +203,39 @@ innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tool
 并自动用 `resources\` 重建 `ffmpeg-lite.zip`（含 FFmpeg 依赖的 MinGW 运行库）。
 
 > `tools/build_release.py` 的 precheck 会校验包内不含开发期文件（TEMP / tools / .git /
-> __pycache__），`TEMP/verify_release.py` 会解析 PE 导入表确认 FFmpeg 的依赖 DLL 都随包分发。
+> __pycache__），`tools/verify/verify_release.py` 会解析 PE 导入表确认 FFmpeg 的依赖 DLL 都随包分发。
+
+### 回归验证脚本（`tools/verify/`）
+
+发布前逐个跑一遍，每个脚本自带断言与 `RESULT: PASS/FAIL`：
+
+| 脚本 | 覆盖点 |
+|---|---|
+| `verify_release.py` | 包内不混开发期文件、FFmpeg 不依赖 MinGW 运行库、快捷方式指向与工作目录 |
+| `verify_components.py` / `verify_stripped_runtime.py` | 组件包与 manifest 一致、剥离后的 runtime 仍能起窗口 |
+| `verify_runtime.py` / `check_release_zip.py` | 安装脚本不删仓库内组件包、Release 资产 zip 可读 |
+| `verify_engine.py` / `verify_ytdlp.py` / `verify_wav.py` | 双后端路由与降级、进度回调、纯音频只取音频流 |
+| `verify_ffmpeg.py` / `verify_gating.py` | FFmpeg 能力探测与 UI 门控（含系统 PATH 侦测） |
+| `verify_install_mode.py` / `check_installed_mode.py` | 便携 / 安装两种形态的数据目录推导与恢复 |
+
+这些脚本一律**由自身位置推导仓库根**，不写死任何绝对路径，可从任意目录调用。
+
+### 单文件 exe（可选，不是发布物）
+
+`JiuDownDesktop.spec` 另外能出一个把 PySide6 + yt-dlp 收进去的单文件 exe（约 104MB）：
+
+```bash
+runtime\python\python.exe -m pip install pyinstaller
+runtime\python\python.exe -m PyInstaller --noconfirm JiuDownDesktop.spec   # 产物在 dist\
+```
+
+必须用 `runtime\python\python.exe` 来打（它才是装着 PySide6/yt-dlp 的那个解释器；
+系统 Python 里没有这些包）。**打完记得把 pyinstaller 卸掉再跑 `build_components.py`**，
+否则 `core.zip` 会把构建工具一起装给用户。
+
+这个 exe 与上面两个包是两条独立路线：它自带解释器，所以启动时会跳过内嵌 `runtime\`
+的自检与补齐（`app.py` 的 frozen 分支），不会去下载 339MB 的 runtime.zip。
+它的定位是「开发期快速起一个二进制入口」，给用户的仍然是 Portable zip 与 Setup。
 
 ## 项目结构
 
@@ -219,7 +255,7 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 ├── system_info.py             # 系统信息与默认路径
 ├── pages/
 │   ├── home_page.py           # 状态总览（引擎 / 站点 / FFmpeg / 系统）
-│   ├── download_page.py       # 下载页（标签卡 + 任务卡 + 右键参数）
+│   ├── download_page.py       # 下载页（链接卡片 + 任务卡 + 右键选档）
 │   ├── preview_panel.py       # 内嵌预览播放器（本地流代理）
 │   ├── hover_preview.py       # 悬停低清小窗
 │   ├── log_page.py            # 运行日志 + 下载记录
@@ -227,7 +263,8 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 ├── runtime_components.py      # 运行时组件划分（打包端与运行端共用）
 ├── tools/
 │   ├── build_components.py    # 打包运行时组件（生成 zip + manifest.json）
-│   └── install_runtime.ps1    # 首次安装：按组件拉取，失败回退整包
+│   ├── install_runtime.ps1    # 首次安装：按组件拉取，失败回退整包
+│   └── verify/                # 发布前回归验证脚本（自带断言，仓库相对锚定）
 ├── 启动.vbs                   # 无控制台启动器（自动探测解释器）
 ├── 首次安装.bat               # 首次安装：拉取离线运行时
 ├── JiuDownDesktop.spec        # PyInstaller 打包配置（相对路径）
@@ -280,7 +317,8 @@ FFmpeg 转码、错误中文化）。
 
 ### ffmpeg_manager.py / runtime_manager.py
 外部依赖自举。`ffmpeg_manager` 负责 FFmpeg 的能力探测（决定哪些格式/声道可用）、
-精简版自动补齐（优先用仓库内 `ffmpeg-lite.zip`）、完整版显式升级与能力缓存；
+查找顺序（程序自带 → 系统 PATH 兜底，PATH 上有能用的就不下载）、精简版自动补齐
+（优先用仓库内 `ffmpeg-lite.zip`）、完整版显式升级与能力缓存；
 `runtime_manager` 负责 `runtime\` 的完整性校验，以及用仓库内 `build_components\`
 的组件包离线补齐（本地包不可用时才回退 Release）。
 
@@ -288,7 +326,11 @@ FFmpeg 转码、错误中文化）。
 
 ### 配置文件位置
 
-程序**不写死任何绝对路径**，所有目录相对程序位置解析，因此文件夹可以随意移动或改名。
+程序**不写死任何绝对路径**：所有目录以程序自身所在目录为基准解析，配置里落在程序目录
+以内的路径存成 `${APP_ROOT}/...`（如 `${APP_ROOT}/TEMP`），因此文件夹可以随意移动、改名、
+换盘符，甚至拷到 U 盘上直接跑。用户显式选到程序目录之外的下载目录仍按绝对路径保存
+（那是真实意图，不该被重锚定）；万一配置里留着已经失效的旧绝对路径（换了机器、拔过 U 盘），
+启动时会自动回退到当前默认值并改写配置，不会拖到下载中途才炸。
 数据落在哪，取决于运行形态（自动判断，见 `system_info.get_install_mode()`）：
 
 **便携模式**（程序目录可写 —— 解压即用 / 源码运行）
@@ -358,10 +400,12 @@ download-task:
 - **手动下载**: 支持手动选择下载核心文件
 
 ### 下载操作
-1. 在应用界面输入B站视频链接（支持批量，每行一个）
-2. 选择下载格式与质量：
-   - 视频：`mp4` / `flv` + 清晰度（360P/480P/720P/1080P）
-   - 纯音频：`mp3`（后缀名方式），选择后质量位切换为声道（单声道/双声道，默认双声道）
+1. 在应用界面输入视频链接（支持批量，每行一个），回车生成**链接卡片**
+2. 卡片后台解析出该视频的标题与实际提供的清晰度档位（不阻塞界面，可右键「重新解析档位」重试）：
+   - 卡片主文字是标题，原链接在右键「查看链接」里看与复制
+   - 右键「清晰度」只列该视频真有的档位；默认档取设置里的默认值不超过视频最高档的那一档
+   - 选中某档后按档精确选流，两后端都给不到时明确报错，不会静默降成低画质
+   - 纯音频（`mp3` / `wav`）时清晰度位切换为声道（单声道/双声道，默认双声道）
 3. 设置保存路径
 4. 点击「开始」并查看实时进度
 
@@ -473,7 +517,21 @@ python -m pdb main.py
 
 ## 更新日志
 
-### v2.0.0 (2026-10-15)
+### v1.1.0 (2026-10-29)
+- ✅ **按视频实际提供的档位选清晰度**：回车生成链接卡片，后台解析出标题与该视频真实存在的
+  清晰度档位再供选择；卡片主文字改为标题，原链接在右键「查看链接」里查看与复制
+- ✅ **高码率档可选**：B 站按 qn 精确选流（1080P 与 1080P 高码率不再混为一谈），
+  yt-dlp 侧按「同分辨率取最高码率」枚举，档位名新增 4K / 2K / 60帧 / HDR
+- ✅ **不再静默降档**：选中某档后两后端都给不到就明确报错；默认档位作为上限自动钳制
+- ✅ **彻底可移植**：配置里落在程序目录内的路径统一存 `${APP_ROOT}/...`，程序根目录只有一处
+  推导，默认值不再按当前工作目录解析，陈旧绝对路径启动时自愈
+- ✅ **FFmpeg 侦测系统 PATH**：机器上已有能用的 ffmpeg 时直接采用，不再自动下载补齐
+- 🔧 修复：`build_components.py` 在中文控制台打印对勾导致构建成功却报失败；设置页 RESTful
+  端口上限低于固定值 64001，保存一次即写坏配置；`save_config` 不清缓存导致改目录需重启
+- 🧹 整理：验证脚本从 `TEMP/` 迁到 `tools/verify/` 并纳入版本管理（其中 11 个原本硬编码了
+  已失效的旧盘符），移除 `.trae/` 编辑器目录
+
+### v1.0.0 (2026-10-15)
 - ✅ 架构迁移：NiceGUI Web 界面 → PySide6 (Qt) 原生桌面应用
 - ✅ 全新界面：侧边导航 + 页面栈，QSS 统一设计规范
 - ✅ asyncio 后台线程桥：下载调度与 UI 事件循环共存
@@ -481,7 +539,7 @@ python -m pdb main.py
 - ✅ 名称统一：应用名称统一为 JiuDown，核心文件本地以 JiuDownCore 命名
 - ✅ 明确 fork 关系：文档注明本项目 fork 自 JiJiDownForDesktop 并修改完善
 
-### v1.0.0 (2024-11-12)
+### 上游 JiJiDownForDesktop（2024-11-12）
 - ✅ 初始版本发布
 - ✅ 跨平台核心文件管理
 - ✅ SHA256哈希验证

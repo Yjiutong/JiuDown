@@ -1,6 +1,7 @@
 # ---- 编辑器 / 本地环境 ----
 # 虚拟环境不入库：自行 `python -m venv .venv`，或双击「首次安装.bat」拉取 runtime
 /.vscode
+/.trae
 /.venv
 # ---- 发布产物与第三方构建工具（均由 tools/build_release.py 生成/下载） ----
 /build

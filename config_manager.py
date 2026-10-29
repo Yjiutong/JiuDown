@@ -23,6 +23,42 @@ def find_executable(name: str) -> Optional[str]:
         return None
 
 
+# 落盘时收成 ${APP_ROOT} token、读取时再展开的配置项（便携版换路径/盘符不失效）
+PATH_KEYS = (
+    ('download-task', 'temp-dir', 'temp_dir'),
+    ('download-task', 'download-dir', 'download_dir'),
+    ('download-task', 'ffmpeg-path', 'ffmpeg_path'),
+)
+
+
+def usable_dir(value: str, fallback_key: str) -> str:
+    """确保目录可用；不可用时回退到当前默认值
+
+    旧配置里常留着换过盘符的绝对路径（如 E:\\JiuDown\\TEMP）。ensure_dir 碰上失效卷
+    会直接抛 WinError 1005，而 get_config 的 post_processor 抛错时只记日志、把坏值
+    原样返回——崩溃点于是被推迟到下载途中的 mkdir，看起来像下载器坏了。这里就地回退。
+    """
+    expanded = system_info.from_config_path(value)
+    try:
+        return ensure_dir(expanded)
+    except Exception as e:
+        default = system_info.get_default_paths()[fallback_key]
+        logger.warning(f"配置目录 {expanded} 不可用（{e}），改用 {default}")
+        return ensure_dir(default)
+
+
+def quality_tiers() -> list:
+    """默认档位名单统一取自引擎；引擎不可用时退回一份内置名单
+
+    退的那份只用于校验，不参与选流——避免导入期成环（ytdlp_engine 反向惰性依赖本模块）。
+    """
+    try:
+        from ytdlp_engine import QUALITY_CHOICES
+        return list(QUALITY_CHOICES)
+    except Exception:
+        return ['最高', '4K', '2K', '1080P', '720P', '480P', '360P']
+
+
 class ConfigManager:
     """配置文件管理器"""
     
@@ -30,18 +66,20 @@ class ConfigManager:
     CONFIG_SCHEMA = {
         'download_dir': {
             'path': 'download-task.download-dir',
-            'default': lambda: str(Path('./Download').resolve()),
+            'default': lambda: system_info.get_default_paths()['download_dir'],
+            'post_processor': lambda path: usable_dir(path, 'download_dir'),
             'description': '下载目录'
         },
         'temp_dir': {
             'path': 'download-task.temp-dir', 
-            'default': lambda: str(Path('./TEMP').resolve()),
-            'post_processor': lambda path: ensure_dir(path),
+            'default': lambda: system_info.get_default_paths()['temp_dir'],
+            'post_processor': lambda path: usable_dir(path, 'temp_dir'),
             'description': '临时目录'
         },
         'ffmpeg_path': {
             'path': 'download-task.ffmpeg-path',
             'default': lambda: system_info.get_default_paths()['ffmpeg_path'],
+            'post_processor': system_info.from_config_path,
             'description': 'FFmpeg路径'
         },
         'log_level': {
@@ -66,9 +104,9 @@ class ConfigManager:
         'default_quality': {
             'path': 'download-task.quality',
             'default': '720P',
-            'validator': lambda x: x in ['最高', '360P', '480P', '720P', '1080P', '单声道', '双声道'],
-            'normalizer': lambda x: x if x in ['最高', '360P', '480P', '720P', '1080P'] else '720P',
-            'description': '默认画质'
+            'validator': lambda x: x in quality_tiers() or x in ('单声道', '双声道'),
+            'normalizer': lambda x: x if x in quality_tiers() else '720P',
+            'description': '默认画质（视频没这么高时自动降到最高可用档）'
         },
         'default_format': {
             'path': 'download-task.format',
@@ -254,9 +292,14 @@ class ConfigManager:
                 'hide-nickname': False
             },
             'download-task': {
-                'temp-dir': system_info.get_default_paths()['temp_dir'],
-                'download-dir': system_info.get_default_paths()['download_dir'],
-                'ffmpeg-path': system_info.get_default_paths()['ffmpeg_path'],
+                # 程序目录内的路径落成 ${APP_ROOT} 形式：新装的 config 从第一个字节起
+                # 就可移植，整个文件夹拷走不需要修复
+                'temp-dir': system_info.to_config_path(
+                    system_info.get_default_paths()['temp_dir']),
+                'download-dir': system_info.to_config_path(
+                    system_info.get_default_paths()['download_dir']),
+                'ffmpeg-path': system_info.to_config_path(
+                    system_info.get_default_paths()['ffmpeg_path']),
                 'max-task': 2,
                 'download-speed-limit': 0,
                 'disable-mcdn': False,
@@ -346,7 +389,7 @@ class ConfigManager:
         return merged
     
     def _normalize_core_compatible_config(self) -> bool:
-        """修正与核心进程不兼容的旧配置值"""
+        """修正与当前环境不兼容的旧配置值（含路径重锚定与 ${APP_ROOT} 收敛）"""
         changed = False
         jdm = self.config_data.get('jdm')
         if not isinstance(jdm, dict):
@@ -358,10 +401,29 @@ class ConfigManager:
             self.config_data['download-task'] = download_task = {}
             changed = True
         
-        ffmpeg_path = download_task.get('ffmpeg-path')
-        if not ffmpeg_path or not Path(ffmpeg_path).exists():
-            download_task['ffmpeg-path'] = system_info.get_default_paths()['ffmpeg_path']
-            changed = True
+        # 路径项：展开 token 后校验可用性，不可用（换了盘符、U 盘拔了）就回退到
+        # 当前默认值并重写；可用则统一收成 ${APP_ROOT} 形式存着
+        for section, key, fallback in PATH_KEYS:
+            block = self.config_data.get(section)
+            if not isinstance(block, dict):
+                continue
+            stored = block.get(key)
+            if not isinstance(stored, str) or not stored.strip():
+                block[key] = system_info.to_config_path(
+                    system_info.get_default_paths()[fallback])
+                changed = True
+                continue
+            expanded = system_info.from_config_path(stored)
+            if key == 'ffmpeg-path':
+                if not Path(expanded).exists():
+                    block[key] = system_info.to_config_path(
+                        system_info.get_default_paths()[fallback])
+                    changed = True
+            else:
+                healed = usable_dir(expanded, fallback)
+                if healed != expanded or system_info.to_config_path(healed) != stored:
+                    block[key] = system_info.to_config_path(healed)
+                    changed = True
         
         min_split_size = jdm.get('min-split-size')
         if not isinstance(min_split_size, int) or not (1 <= min_split_size <= 100):
@@ -383,6 +445,23 @@ class ConfigManager:
             else:
                 base[key] = value
     
+    def _paths_for_storage(self) -> None:
+        """落盘前把路径项收成 ${APP_ROOT} 形式
+
+        在 save_config 里统一做，而不是在各个 setter 里做：设置页是整段 yaml 字典
+        直接写进来的，只盯 set_config 会漏掉那条路径。
+        """
+        for section, key, schema_key in PATH_KEYS:
+            block = self.config_data.get(section)
+            if not isinstance(block, dict):
+                continue
+            value = block.get(key)
+            if isinstance(value, str) and value.strip():
+                block[key] = system_info.to_config_path(value)
+            # 整段替换配置时不会走 set_config，缓存得自己失效，
+            # 否则在设置页改了临时目录要重启才生效
+            self._config_cache.pop(schema_key, None)
+
     def save_config(self, config_data: Optional[Dict[str, Any]] = None) -> bool:
         """
         保存配置文件
@@ -395,7 +474,9 @@ class ConfigManager:
         """
         if config_data:
             self.config_data = config_data
-            
+
+        self._paths_for_storage()
+
         if not self.config_file_path:
             self.config_file_path = self.get_config_file_path()
             
@@ -501,51 +582,6 @@ class ConfigManager:
         """获取外部控制器端口配置"""
         return self.get_config('external_ports')
     
-    def validate_config(self) -> Dict[str, Any]:
-        """
-        验证配置有效性
-        
-        Returns:
-            验证结果 {'valid': bool, 'errors': list}
-        """
-        errors = []
-        
-        # 验证日志级别
-        log_level = self.get_log_level()
-        valid_log_levels = ['info', 'warning', 'error', 'debug', 'silent']
-        if log_level not in valid_log_levels:
-            errors.append(f"无效的日志级别: {log_level}")
-        
-        # 验证最大任务数
-        max_task = self.get_max_task()
-        if not 1 <= max_task <= 5:
-            errors.append(f"最大任务数必须在1-5之间: {max_task}")
-        
-        # 验证下载速度限制
-        speed_limit = self.get_download_speed_limit()
-        if speed_limit < 0 or speed_limit > 1073741824:
-            errors.append(f"下载速度限制必须在0-1073741824之间: {speed_limit}")
-        
-        # 验证端口配置
-        ports = self.get_external_ports()
-        for port_name, port_value in ports.items():
-            if port_value != 0 and not 1024 <= port_value <= 49151:
-                errors.append(f"{port_name}端口必须在1024-49151之间或设为0: {port_value}")
-        
-        # 验证路径
-        temp_dir = self.get_temp_dir()
-        if temp_dir and not Path(temp_dir).parent.exists():
-            errors.append(f"临时目录父目录不存在: {Path(temp_dir).parent}")
-            
-        download_dir = self.get_download_dir()
-        if download_dir and not Path(download_dir).parent.exists():
-            errors.append(f"下载目录父目录不存在: {Path(download_dir).parent}")
-        
-        return {
-            'valid': len(errors) == 0,
-            'errors': errors
-        }
-    
     def export_config(self, export_path: str) -> bool:
         """
         导出配置到指定路径
@@ -557,6 +593,7 @@ class ConfigManager:
             是否导出成功
         """
         try:
+            self._paths_for_storage()
             export_file = Path(export_path)
             with open(export_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)

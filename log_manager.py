@@ -10,13 +10,16 @@ from loguru import logger
 
 
 def _default_core_log_path() -> Path:
-    """核心日志默认路径：跟随用户数据目录（安装模式下程序目录只读）"""
+    """核心日志默认路径：跟随用户数据目录（安装模式下程序目录只读）
+
+    兜底分支也不能用相对路径：从快捷方式/U 盘启动时 CWD 未必是程序目录。
+    """
     try:
         from system_info import system_info
 
         return Path(system_info.get_default_paths()["logs_dir"]) / "core_log.txt"
     except Exception:
-        return Path("logs/core_log.txt")
+        return Path(__file__).resolve().parent / "logs" / "core_log.txt"
 
 
 class CoreLogManager:

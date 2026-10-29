@@ -103,10 +103,16 @@ class DownloadManager:
         quality: Optional[str] = None,
         file_format: Optional[str] = None,
         progress_callback: Optional[Callable] = None,
+        level: Optional[dict] = None,
+        levels: Optional[List[dict]] = None,
     ) -> str:
-        """添加下载任务并进入并发调度队列，返回任务 id"""
+        """添加下载任务并进入并发调度队列，返回任务 id
+
+        level 是链接卡片解析出来的具体档位（含 selector / qn）；缺省时引擎退回按
+        quality 档位名近似选流。
+        """
         url = (url or "").strip()
-        quality = quality or config_manager.get_default_quality()
+        quality = (level or {}).get("label") or quality or config_manager.get_default_quality()
         output_format = file_format or config_manager.get_default_format()
         task_id = uuid.uuid4().hex[:12]
         with self._lock:
@@ -114,6 +120,8 @@ class DownloadManager:
                 "id": task_id,
                 "url": url,
                 "quality": quality,
+                "quality_level": level,
+                "levels": list(levels or []),
                 "format": output_format,
                 "progress_callback": progress_callback,
                 "status": "queued",
@@ -194,7 +202,8 @@ class DownloadManager:
             download_log_manager.save_log(f"[下载] 已清空 {len(removable)} 条完成记录")
         return len(removable)
 
-    def update_task_config(self, task_id: str, quality: str, file_format: str) -> bool:
+    def update_task_config(self, task_id: str, quality: str, file_format: str,
+                           level: Optional[dict] = None) -> bool:
         """修改未开始任务的参数（下载中/已结束不生效）"""
         task = self.tasks.get(task_id)
         if not task or task_id in self._active:
@@ -202,6 +211,7 @@ class DownloadManager:
         if task.get("status") in ("completed", "cancelled"):
             return False
         task["quality"] = quality
+        task["quality_level"] = level
         task["format"] = file_format
         return True
 
@@ -361,6 +371,7 @@ class DownloadManager:
             url = task.get("url", "")
             quality = task.get("quality") or config_manager.get_default_quality()
             output_format = task.get("format") or config_manager.get_default_format()
+            level = task.get("quality_level")
             if not url:
                 raise engine.EngineError("链接为空")
 
@@ -391,6 +402,7 @@ class DownloadManager:
                 url,
                 quality=quality,
                 file_format=output_format,
+                level=level,
                 out_dir=out_dir,
                 temp_dir=temp_dir,
                 channels=channels,

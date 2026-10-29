@@ -11,7 +11,8 @@ FFmpeg 环境管理（精简版优先 + 用户显式升级完整版）
 启动时探测当前 ffmpeg 的能力：
 - 能力齐备（full / ready） → 无事
 - 能力不足（lite）         → UI 门控掉做不到的格式/声道，并提示可升级
-- 缺失（missing）          → 自动拉取精简版
+- 缺失（missing）          → 先看系统 PATH 上有没有能用的 ffmpeg，有就直接用
+                            （不再自动下载补齐），没有才拉精简版
 
 UI 侧通过 format_supported() / mono_supported() 禁用当前 ffmpeg 做不到的
 选项；二进制被替换后经 capabilities_changed 信号重新门控。
@@ -116,7 +117,11 @@ def _caps_cache_file() -> Path:
     try:
         return Path(config_manager.get_config_file_path()).parent / "ffmpeg_caps.json"
     except Exception:
-        return Path(__file__).resolve().parent / "config" / "ffmpeg_caps.json"
+        # 兜底也走 system_info：装到 Program Files 时程序目录只读，
+        # 写死在 __file__/config 会静默丢失缓存
+        from system_info import system_info
+
+        return system_info.get_config_dir() / "ffmpeg_caps.json"
 
 
 def _caps_key_dict(key) -> dict:
@@ -164,13 +169,53 @@ def _save_disk_caps(key, caps, version: str) -> None:
 
 # ---------------------------------------------------------------- 公共 API
 
+# FFmpeg 来源：程序自带（可移植那三份候选）/ 系统 PATH 兜底
+SOURCE_BUNDLED = "bundled"
+SOURCE_PATH = "path"
+
+
+def _system_ffmpeg() -> str:
+    """系统 PATH 上的 ffmpeg 绝对路径；没有则空串
+
+    这里只负责定位，不判断能不能用：Windows 的「应用执行别名」会在
+    WindowsApps 下放一个 0 字节占位 exe，PATH 里找得到但跑不出任何东西，
+    所以是否采用由能力探测决定（见 ensure_available）。
+    """
+    try:
+        found = shutil.which(FFMPEG_EXE_NAME)
+    except Exception:
+        return ""
+    return str(found) if found else ""
+
+
+def _resolve_ffmpeg() -> tuple[str, str]:
+    """返回 (路径, 来源)：程序自带的优先，全部缺失时才退到系统 PATH
+
+    自带候选都在程序目录内，是"整个文件夹拷走就能用"的前提；PATH 只当兜底，
+    顺序反过来的话用户机器上一个同名 ffmpeg 就会盖掉应用自带的版本。
+    """
+    bundled = system_info.get_default_paths()["ffmpeg_path"]
+    if bundled and Path(bundled).exists():
+        return bundled, SOURCE_BUNDLED
+    found = _system_ffmpeg()
+    if found:
+        return found, SOURCE_PATH
+    return bundled, SOURCE_BUNDLED
+
+
 def get_ffmpeg_path() -> str:
     """应用使用的 FFmpeg 路径
 
-    查找顺序：用户数据目录下升级过的副本 → runtime/ffmpeg.exe → 程序内置 resources/。
-    路径统一由 system_info 计算（安装模式下程序目录只读，下载/升级的副本放在用户目录）。
+    查找顺序：用户数据目录下升级过的副本 → runtime/ffmpeg.exe → 程序内置 resources/
+    → 系统 PATH。前三项都由 system_info 相对程序目录计算（安装模式下程序目录只读，
+    下载/升级的副本落在用户目录）；最后一项是兜底，机器上已有 ffmpeg 时不再自动下载。
     """
-    return system_info.get_default_paths()["ffmpeg_path"]
+    return _resolve_ffmpeg()[0]
+
+
+def get_ffmpeg_source() -> str:
+    """当前 FFmpeg 来自程序自带还是系统 PATH（UI 用它解释为何没有自动补齐）"""
+    return _resolve_ffmpeg()[1]
 
 
 def ffmpeg_exists() -> bool:
@@ -271,8 +316,9 @@ def get_status() -> dict:
             ready 精简版但应用所需能力齐备（正常状态）
             lite  能力不足，部分格式/声道需置灰
             downloading / failed / missing
+        source: bundled（程序自带）/ path（来自系统 PATH，因此没有自动下载）
     """
-    path = get_ffmpeg_path()
+    path, source = _resolve_ffmpeg()
     with _state_lock:
         st = dict(_state)
     if st["status"] == "downloading":
@@ -288,6 +334,7 @@ def get_status() -> dict:
     return {
         "status": status,
         "path": path,
+        "source": source,
         "version": get_version(),
         "progress": st["progress"],
         "error": st["error"],
@@ -361,18 +408,24 @@ def _install_from_zip(zip_path: Path, target: Path, markers: tuple, label: str) 
 
 
 def ensure_available() -> bool:
-    """确保有一个可用的 FFmpeg（缺失时补精简版，约 2.3MB 压包）
+    """确保有一个可用的 FFmpeg（机器上已有就用，实在没有才补精简版）
 
-    与 start_auto_upgrade() 的分工：
-      - 本函数只在**完全没有 ffmpeg** 时动作，且只下精简版
-      - 已有精简版就保持不动，绝不悄悄升级成 161MB 完整版
-    需要完整能力（罕见容器、视频重编码等）时，由用户显式点「升级完整版」。
+    判定顺序：
+      1. 程序自带的三份候选有任意一个存在 → 直接用它（便携包的正常状态）
+      2. 自带都没有、但系统 PATH 上有 ffmpeg → 用系统的，**不下载任何东西**；
+         前提是它真跑得动且具备下载链路所需能力（Windows 应用别名占位 exe、
+         上古精简构建都过不了这一关）
+      3. 两条都没有 → 补内置精简版（约 2.3MB 压包，优先用仓库内的组件包离线装）
 
-    组件包随仓库分发（build_components/ffmpeg-lite.zip），命中就离线安装，
-    只有在仓库里没带这份包时才去 Release 拉取。
+    与 start_auto_upgrade() 的分工：本函数只在没有可用 ffmpeg 时动作且只下精简版，
+    已有精简版就保持不动，绝不悄悄升级成 161MB 完整版；需要完整能力时由用户显式升级。
     """
     if ffmpeg_exists():
-        return True
+        if get_ffmpeg_source() != SOURCE_PATH or is_ready():
+            return True
+        logger.info(
+            f"系统 PATH 上的 FFmpeg 能力不足，改用内置精简版: {get_ffmpeg_path()}"
+        )
 
     target = Path(system_info.get_writable_resources_dir()) / FFMPEG_EXE_NAME
     resources_dir = Path(system_info.get_writable_resources_dir())
@@ -578,8 +631,12 @@ def _install(src: Path, target: Path) -> None:
 
 
 def _apply_pending() -> None:
-    """把上次遗留的 ffmpeg-full.exe 替换到目标（启动时调用）"""
-    target = Path(get_ffmpeg_path())
+    """把上次遗留的 ffmpeg-full.exe 替换到目标（启动时调用）
+
+    目标固定为可写 resources 目录，绝不能用 get_ffmpeg_path()：加了 PATH 兜底之后，
+    那个函数可能指向用户自己装的 C:\\ffmpeg\\bin\\ffmpeg.exe，遗留包会把他的文件覆盖掉。
+    """
+    target = Path(system_info.get_writable_resources_dir()) / FFMPEG_EXE_NAME
     pending = target.parent / "ffmpeg-full.exe"
     if not pending.exists():
         return

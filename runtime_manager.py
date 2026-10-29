@@ -50,10 +50,14 @@ ENGINE_PACKAGE_DIR = "python/Lib/site-packages/yt_dlp"
 
 
 def get_base_dir() -> Path:
-    """获取应用根目录（打包后为 exe 所在目录，开发模式为脚本所在目录）"""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    """获取应用根目录（打包后为 exe 所在目录，开发模式为脚本所在目录）
+
+    推导规则只有 system_info 一处实现：三处各写一份 frozen 判断的话，
+    换打包方式时最容易漏的就是其中一处。
+    """
+    from system_info import system_info  # 局部导入避免启动期成环
+
+    return system_info.get_app_root()
 
 
 def get_runtime_dir() -> Path:

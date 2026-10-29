@@ -147,6 +147,10 @@ class HomePage(QWidget):
         state = ffmpeg_manager.get_status()
         label = {"full": "完整版", "ready": "精简版", "lite": "能力不足",
                  "missing": "未找到"}.get(state["status"], state["status"])
+        if state.get("source") == ffmpeg_manager.SOURCE_PATH:
+            # 能力不足时启动流程仍会补内置精简版，不能写成"无需下载"
+            usable = state["status"] in ("full", "ready")
+            label += "（系统 PATH，无需下载）" if usable else "（系统 PATH，能力不足）"
         self._ffmpeg_line.setText(f"FFmpeg: {label}")
 
         try:

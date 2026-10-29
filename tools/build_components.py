@@ -167,7 +167,9 @@ def main() -> int:
     if failures:
         print(f"[警告] 以下组件超过 100MB，需要进一步拆分: {', '.join(failures)}")
         return 2
-    print("全部组件均 < 100 MB ✓")
+    # 别在这里打印非 GBK 字符（如对勾）：中文 Windows 控制台默认 GBK，编不出来
+    # 会让成功的构建以 UnicodeEncodeError + 退出码 1 收场
+    print("全部组件均 < 100 MB")
     print("下一步：把 build_components/ 里的 zip + manifest.json 上传到 release 的 runtime 标签")
     return 0
 

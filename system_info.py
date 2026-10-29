@@ -11,6 +11,10 @@ from loguru import logger
 # 用户数据目录名（安装模式下 %LOCALAPPDATA%\JiuDown）
 APP_DIR_NAME = 'JiuDown'
 
+# 配置里代表「程序所在目录」的写法。整个文件夹被拷到别的路径/盘符时，
+# 这类值不需要任何修正就继续指向新的位置；程序目录之外的路径仍按绝对路径存。
+APP_ROOT_TOKEN = '${APP_ROOT}'
+
 
 # 各平台对应的官方核心文件名（官网下载源真实存在的文件）
 CORE_PLATFORM_FILENAMES = {
@@ -91,11 +95,55 @@ class SystemInfo:
         return CORE_PLATFORM_FILENAMES[self._core_platform_key()]
     
     # ------------------------------------------------------------ 目录策略
-    def _get_runtime_base_dir(self) -> Path:
-        """程序运行目录（代码所在处，安装模式下通常为只读的 Program Files）"""
+    def get_app_root(self) -> Path:
+        """程序自身所在目录（全项目唯一出处，别处不要再各自推导）
+
+        - 源码运行：本文件所在目录，即项目根
+        - PyInstaller 打包：exe 所在目录（onefile 下不能用 __file__，它在临时解包目录里）
+        """
         if getattr(sys, 'frozen', False):
             return Path(sys.executable).resolve().parent
         return Path(__file__).resolve().parent
+
+    # ------------------------------------------------------------ 配置路径 token
+    def to_config_path(self, path) -> str:
+        """把「程序目录以内」的路径写成 ${APP_ROOT}/... ，目录以外的保留绝对路径
+
+        放进程序目录的东西（TEMP、便携模式的 Download、内置 ffmpeg）本来就该跟着
+        目录走，存成 token 后整个文件夹挪动不需要任何修复；而用户显式选到外部的
+        下载目录（如 D:\\电影）是他的真实意图，不能被重锚定。
+        """
+        raw = str(path or "").strip()
+        if not raw:
+            return raw
+        if raw.startswith(APP_ROOT_TOKEN):
+            return raw  # 已是 token 形式：重复调用（如落盘时再收一次）不能套成两层
+        root = self.get_app_root()
+        try:
+            target = Path(raw).expanduser()
+            if not target.is_absolute():
+                target = root / target
+            rel = target.resolve().relative_to(root)
+        except (OSError, ValueError):
+            return raw
+        rel_text = rel.as_posix()
+        return APP_ROOT_TOKEN if rel_text == "." else f"{APP_ROOT_TOKEN}/{rel_text}"
+
+    def from_config_path(self, value) -> str:
+        """把配置值展开成绝对路径（${APP_ROOT} 按当前程序目录展开）
+
+        顺带兼容两种历史写法：仓库里流传过的 './TEMP' 相对写法（过去按 CWD 解析，
+        从快捷方式启动就会指错地方），以及裸相对路径——一律按程序目录锚定。
+        """
+        raw = str(value or "").strip()
+        if not raw:
+            return raw
+        root = self.get_app_root()
+        raw = raw.replace(APP_ROOT_TOKEN, str(root))
+        target = Path(raw).expanduser()
+        if not target.is_absolute():
+            target = root / target
+        return str(target)
 
     @staticmethod
     def _is_writable(path: Path) -> bool:
@@ -139,7 +187,7 @@ class SystemInfo:
         if 'user_data_dir' in self._cache:
             return self._cache['user_data_dir']
 
-        base = self._get_runtime_base_dir()
+        base = self.get_app_root()
         if self._is_writable(base):
             data_dir, mode = base, 'portable'
         else:
@@ -157,13 +205,13 @@ class SystemInfo:
         """
         if self.get_install_mode() == 'installed':
             return self.get_user_data_dir() / 'resources'
-        return self._get_runtime_base_dir() / 'resources'
+        return self.get_app_root() / 'resources'
 
     def get_default_download_dir(self) -> Path:
         """默认下载目录：便携模式在程序目录下，安装模式用系统「下载」文件夹"""
         if self.get_install_mode() == 'installed':
             return Path.home() / 'Downloads' / APP_DIR_NAME
-        return self._get_runtime_base_dir() / 'Download'
+        return self.get_app_root() / 'Download'
 
     def get_config_dir(self) -> Path:
         """获取配置目录路径（跟随用户数据目录，便携模式下即程序目录下的 config）"""
@@ -171,7 +219,7 @@ class SystemInfo:
 
     def get_default_paths(self) -> Dict[str, str]:
         """获取默认路径配置（区分程序目录与用户数据目录）"""
-        base_dir = self._get_runtime_base_dir()
+        base_dir = self.get_app_root()
         data_dir = self.get_user_data_dir()
         ffmpeg_name = 'ffmpeg.exe' if platform.system() == 'Windows' else 'ffmpeg'
         # FFmpeg 查找顺序：用户目录下升级过的副本 → runtime → 程序内置 resources

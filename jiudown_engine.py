@@ -41,7 +41,10 @@ from ytdlp_engine import (  # 统一常量与工具（避免 UI 层出现两套�
     QUALITY_CHOICES,
     EngineError,
     format_selector,
+    level_label,
     normalize_url,
+    pick_default_level,
+    short_edge,
 )
 
 ENGINE_NAME = "JiuDown Engine"
@@ -53,6 +56,11 @@ BACKEND_LABELS = {
     "native": "仅原生（B 站）",
     "ytdlp": "仅 yt-dlp",
 }
+
+
+def _level_rank(level: dict) -> tuple[int, int]:
+    """档位排序键：先分辨率再帧率，两后端共用同一形状"""
+    return (int(level.get("height") or 0), int(level.get("fps") or 0))
 
 
 # =====================================================================
@@ -74,15 +82,21 @@ class NativeBilibiliBackend:
         ),
     }
     # 画质档位 → B 站 qn（16=360P, 32=480P, 64=720P, 80=1080P, 127=请求最高可用）
+    # 只是「用户没逐档选时的近似档位」；1080P 高码率 / 4K 这类细档由 list_levels() 现取
     QUALITY_QN = {
         "360P": 16,
         "480P": 32,
         "720P": 64,
         "1080P": 80,
+        "2K": 127,
+        "4K": 127,
         "最高": 127,
     }
     # 预览用低清 qn 序列（音视频合一 durl，失败逐级回退）
     PREVIEW_QN = (16, 32)
+    # 需要登录 / 大会员才能拿到流的 qn（接口会照单列出档位，但不回对应 DASH 流）
+    QN_LOGIN_MIN = 64
+    QN_VIP_SET = frozenset({112, 113, 116, 117, 120, 125, 126, 127})
 
     _BV_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
     _AV_RE = re.compile(r"av(\d+)", re.IGNORECASE)
@@ -194,9 +208,8 @@ class NativeBilibiliBackend:
             "pages": data.get("pages") or [],
         }
 
-    def _streams(self, bvid: str, cid: int, quality: str) -> dict:
-        """取该清晰度的 DASH 流；无 dash 时回退 durl 单文件"""
-        qn = self.QUALITY_QN.get(quality, 64)
+    def _playurl(self, bvid: str, cid: int, qn: int) -> dict:
+        """请求 playurl（DASH 全量 + 4K）；返回 data 段"""
         api = (
             f"{self.BASE_API}/x/player/playurl"
             f"?bvid={bvid}&cid={cid}&qn={qn}&fnval=4048&fourk=1"
@@ -208,30 +221,195 @@ class NativeBilibiliBackend:
             raise EngineError(
                 f"播放地址获取失败：{payload.get('message', '未知错误')}"
             )
-        data = payload.get("data") or {}
+        return payload.get("data") or {}
+
+    # ---------------------------------------------------------------- 档位
+
+    @staticmethod
+    def _desc_height(desc: str) -> int:
+        """从 B 站档位文案里取代表高度（"1080P 高码率"→1080、"4K 超清"→2160）
+
+        不维护 qn→高度 常量表：B 站会新增 qn，常量表一过期就把新档位读成 0。
+        """
+        text = (desc or "").strip()
+        k = re.search(r"(\d+)\s*[Kk]", text)
+        if k:
+            return {"2": 1440, "4": 2160, "8": 4320}.get(k.group(1), int(k.group(1)) * 540)
+        p = re.search(r"(\d{3,4})\s*[Pp]", text)
+        return int(p.group(1)) if p else 0
+
+    @staticmethod
+    def _stream_fps(stream: dict) -> int:
+        """B 站 frame_rate 兼容 "25" / "25.00 fps" / "30000f"（毫帧）三种写法"""
+        raw = str(stream.get("frame_rate") or stream.get("frameRate") or "")
+        num = re.search(r"\d+(\.\d+)?", raw)
+        if not num:
+            return 0
+        value = float(num.group())
+        if "f" in raw.lower() and value > 1000:
+            value /= 1000
+        return int(round(value))
+
+    def _unavailable_reason(self, qn: int) -> str:
+        """原生链路暂未下发该档的原因说明（只是提示，不是闸门）
+
+        未签 WBI 的公开 playurl 会被限到 480P，而同一个档位通用后端（yt-dlp）实测
+        能取到 1080P，所以这里不能断言「你拿不到」，只能说「原生链路这次没给」：
+        选中后由通用后端尝试，两边都给不到才会报错——绝不静默降档。
+        """
+        vip = qn in self.QN_VIP_SET
+        login = qn >= self.QN_LOGIN_MIN
+        if vip:
+            cause = "该档通常需要大会员"
+        elif login:
+            cause = "该档通常需要登录"
+        else:
+            cause = "接口本次未下发该档"
+        return f"{cause}；原生链路暂未返回，选中后走通用后端"
+
+    def _levels_from(self, data: dict) -> list[dict]:
+        """support_formats（视频声明的档位）× dash（当前账号真正能取的流）
+
+        两者必须分开看：未登录时 support_formats 照样列出 1080P+，但 dash 只回
+        480P/360P。把声明的档位当成可下载档位，正是「选了 1080P 却下成 480P」的
+        根因，所以不可用的档位标灰并写清原因，而不是静默降档。
+        """
+        dash = data.get("dash") or {}
+        pulled: dict[int, list[dict]] = {}
+        for stream in dash.get("video") or []:
+            pulled.setdefault(int(stream.get("id") or 0), []).append(stream)
+        max_qn = max(pulled, default=0)
+
+        levels: list[dict] = []
+        for item in data.get("support_formats") or []:
+            qn = int(item.get("quality") or 0)
+            label = str(
+                item.get("new_description") or item.get("display_desc")
+                or item.get("desc") or ""
+            ).strip()
+            group = pulled.get(qn) or []
+            if group:
+                height = max(short_edge(s) for s in group)
+                pixels = max(int(s.get("height") or 0) for s in group)
+                fps = max(self._stream_fps(s) for s in group)
+            else:
+                height = self._desc_height(label)
+                pixels = height
+                fps = 60 if "60" in label or "高帧率" in label else 0
+            if not label:
+                label = level_label(height, fps)
+            # B 站按连续阶梯放行：能取到 1080P，就一定给得到它以下的档位
+            available = bool(group) or (0 < qn < max_qn)
+            levels.append({
+                "label": label,
+                "height": height,
+                "pixels": pixels,
+                "fps": fps,
+                "hdr": "HDR" in label.upper(),
+                "selector": None,
+                "qn": qn,
+                "available": available,
+                "reason": "" if available else self._unavailable_reason(qn),
+            })
+        if not levels:
+            levels = self._levels_from_accept(data)
+        levels.sort(key=_level_rank, reverse=True)
+        return levels
+
+    def _levels_from_accept(self, data: dict) -> list[dict]:
+        """老稿件 / 单文件流：没有 support_formats 时按 accept_* 组档位"""
+        qualities = data.get("accept_quality") or []
+        descriptions = data.get("accept_description") or []
+        granted = int(data.get("quality") or 0)
+        levels: list[dict] = []
+        for index, raw_qn in enumerate(qualities):
+            qn = int(raw_qn or 0)
+            label = str(descriptions[index] if index < len(descriptions) else "").strip()
+            height = self._desc_height(label)
+            ok = bool(granted) and qn <= granted
+            levels.append({
+                "label": label or level_label(height),
+                "height": height,
+                "pixels": height,
+                "fps": 60 if "60" in label else 0,
+                "hdr": False,
+                "selector": None,
+                "qn": qn,
+                "available": ok,
+                "reason": "" if ok else self._unavailable_reason(qn),
+            })
+        return levels
+
+    def list_levels(self, url: str) -> dict:
+        bvid = self.parse_bvid(url)
+        info = self._video_info(bvid)
+        data = self._playurl(bvid, info["cid"], 127)
+        levels = self._levels_from(data)
+        logger.info(
+            f"[引擎/native] 档位解析: {info['title']} | "
+            f"{' / '.join(lv['label'] for lv in levels if lv['available']) or '无可用档'}"
+        )
+        return {
+            "title": info["title"],
+            "extractor": "BiliBili(native)",
+            "duration": info["duration"],
+            "thumbnail": info["thumbnail"],
+            "levels": levels,
+        }
+
+    # ---------------------------------------------------------------- 选流
+
+    def _streams(self, bvid: str, cid: int, quality: str,
+                 level: Optional[dict] = None) -> dict:
+        """取该清晰度的 DASH 流；无 dash 时回退 durl 单文件
+
+        按 qn 精确选流：1080P(qn=80) 与 1080P 高码率(qn=112) 高度相同，只比
+        height 永远拿不到高码率那条。
+        """
+        wanted = int((level or {}).get("qn") or 0)
+        qn = wanted or self.QUALITY_QN.get(quality, 64)
+        data = self._playurl(bvid, cid, qn)
         dash = data.get("dash") or {}
         videos = dash.get("video") or []
         audios = dash.get("audio") or []
+        label = str((level or {}).get("label") or quality)
 
         if not videos and data.get("durl"):
+            granted = int(data.get("quality") or 0)
+            if wanted and granted and granted < wanted:
+                # 单文件流同样不许偷偷降档：服务端给低了就明说
+                raise EngineError(
+                    f"B 站原生链路取不到「{label}」的流；{self._unavailable_reason(wanted)}"
+                )
             durl = data["durl"][0]
-            return {"video_url": durl.get("url"), "audio_url": None, "quality": quality}
+            return {"video_url": durl.get("url"), "audio_url": None, "quality": label}
 
         if not videos:
-            raise EngineError(f"B 站未返回可下载流（清晰度 {quality}）")
+            raise EngineError(f"B 站未返回可下载流（清晰度 {label}）")
 
-        # 取满足目标高度的最高码率流；没有则退回最高可用
-        target = {"360P": 360, "480P": 480, "720P": 720, "1080P": 1080}.get(quality)
-        if target:
-            candidates = [v for v in videos if int(v.get("height") or 0) <= target] or videos
-        else:
+        candidates = [v for v in videos if int(v.get("id") or 0) == wanted] if wanted else []
+        if not candidates and wanted:
+            # 容忍同档位的 qn 漂移：按高度兜底，但只允许等于或高于所选档，绝不降档
+            height = int((level or {}).get("height") or 0)
+            if height:
+                candidates = [v for v in videos if short_edge(v) >= height]
+        if not candidates and wanted:
+            raise EngineError(
+                f"B 站原生链路取不到「{label}」的流；{self._unavailable_reason(wanted)}"
+            )
+        if not candidates:
+            target = int((level or {}).get("height") or 0) or int(
+                ytdlp_engine.QUALITY_HEIGHTS.get(quality) or 0)
+            if target:
+                candidates = [v for v in videos if short_edge(v) <= target]
+        if not candidates:
             candidates = videos
-        video = max(candidates, key=lambda v: (int(v.get("height") or 0), int(v.get("bandwidth") or 0)))
+        video = max(candidates, key=lambda v: (short_edge(v), int(v.get("bandwidth") or 0)))
         audio = max(audios, key=lambda a: int(a.get("bandwidth") or 0)) if audios else None
         return {
             "video_url": video.get("baseUrl") or video.get("base_url"),
             "audio_url": (audio or {}).get("baseUrl") or (audio or {}).get("base_url"),
-            "quality": quality,
+            "quality": label,
             "height": int(video.get("height") or 0),
         }
 
@@ -370,6 +548,7 @@ class NativeBilibiliBackend:
         *,
         quality: str = "720P",
         file_format: str = "mp4",
+        level: Optional[dict] = None,
         out_dir: str,
         temp_dir: str,
         channels: str = "双声道",
@@ -378,7 +557,7 @@ class NativeBilibiliBackend:
     ) -> dict:
         bvid = self.parse_bvid(url)
         info = self._video_info(bvid)
-        streams = self._streams(bvid, info["cid"], quality)
+        streams = self._streams(bvid, info["cid"], quality, level)
 
         out_path = Path(out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -560,12 +739,29 @@ class JiuDownEngine:
                 logger.debug(f"[引擎] {backend} 解析失败，尝试下一后端: {e}")
         raise EngineError(_merge_errors(errors))
 
+    def list_levels(self, url: str) -> dict:
+        """该链接实际提供的所有清晰度档位（两后端返回同一种档位结构）"""
+        target = normalize_url(url)
+        if not target:
+            raise EngineError("链接格式不正确，请粘贴以 http(s):// 开头的网址")
+        errors: list[str] = []
+        for backend in self._plan(target):
+            try:
+                if backend == "native":
+                    return self.native.list_levels(target)
+                return ytdlp_engine.list_levels(target)
+            except Exception as e:
+                errors.append(f"{backend}: {e}")
+                logger.debug(f"[引擎] {backend} 档位解析失败，尝试下一后端: {e}")
+        raise EngineError(_merge_errors(errors))
+
     def download(
         self,
         url: str,
         *,
         quality: str = "720P",
         file_format: str = "mp4",
+        level: Optional[dict] = None,
         out_dir: str,
         temp_dir: str,
         channels: str = "双声道",
@@ -580,14 +776,14 @@ class JiuDownEngine:
             try:
                 if backend == "native":
                     result = self.native.download(
-                        target, quality=quality, file_format=file_format,
+                        target, quality=quality, file_format=file_format, level=level,
                         out_dir=out_dir, temp_dir=temp_dir, channels=channels,
                         progress_hook=progress_hook,
                         postprocessor_hook=postprocessor_hook,
                     )
                 else:
                     result = ytdlp_engine.download(
-                        target, quality=quality, file_format=file_format,
+                        target, quality=quality, file_format=file_format, level=level,
                         out_dir=out_dir, temp_dir=temp_dir, channels=channels,
                         progress_hook=progress_hook,
                         postprocessor_hook=postprocessor_hook,
@@ -638,6 +834,9 @@ engine = JiuDownEngine()
 
 # ---- 模块级函数式 API（与旧 ytdlp_engine 用法保持一致，调用方无需 engine.engine） ----
 COOKIE_BROWSERS = ytdlp_engine.COOKIE_BROWSERS
+QUALITY_HEIGHTS = ytdlp_engine.QUALITY_HEIGHTS
+level_label = ytdlp_engine.level_label
+pick_default_level = ytdlp_engine.pick_default_level
 
 
 def available() -> bool:
@@ -650,6 +849,10 @@ def version() -> str:
 
 def probe(url: str) -> dict:
     return engine.probe(url)
+
+
+def list_levels(url: str) -> dict:
+    return engine.list_levels(url)
 
 
 def download(url: str, **kwargs) -> dict:
@@ -679,10 +882,13 @@ __all__ = [
     "AUDIO_FORMATS",
     "FORMAT_CHOICES",
     "QUALITY_CHOICES",
+    "QUALITY_HEIGHTS",
     "EngineError",
     "JiuDownEngine",
     "NativeBilibiliBackend",
     "engine",
     "format_selector",
+    "level_label",
     "normalize_url",
+    "pick_default_level",
 ]

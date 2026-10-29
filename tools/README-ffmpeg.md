@@ -119,7 +119,7 @@ runtime\python\python.exe tools/build_release.py      # 顺带刷新 ffmpeg-lite
    时定义 `WINPTHREAD_STATIC`，要再付一次 ~30 分钟的 configure）。
    所以发布包必须把 `libwinpthread-1.dll`（72KB）和 ffmpeg.exe 放在同一目录；
    否则开发机上一切正常（PATH 里有 mingw），用户机器上就是 **0xC0000135 启动即崩**。
-   `TEMP/verify_release.py` 会解析 PE 导入表做这项检查。
+   `tools/verify/verify_release.py` 会解析 PE 导入表做这项检查。
 
    顺带：产物还依赖 `api-ms-win-crt-*`（UCRT），Windows 10 起自带，
    Windows 8.1 及更早需要 KB2999226。

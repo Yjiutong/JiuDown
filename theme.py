@@ -22,7 +22,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 APP_TITLE = "JiuDown"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 # 窗口圆角（无边框窗口的苹果式圆角遮罩半径）
 WINDOW_RADIUS = 11

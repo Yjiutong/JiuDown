@@ -121,6 +121,12 @@ def _bootstrap_after_ui(window) -> None:
     # 1) runtime 环境自检（会 spawn 一次内嵌 python，且缺失时下载，耗时不固定）
     def _runtime_check() -> None:
         try:
+            if getattr(sys, "frozen", False):
+                # 打包版自带解释器，PySide6/yt-dlp 也已收进 exe，
+                # 再去拉 339MB 的 runtime.zip 纯属白费流量
+                logger.info("打包形态：跳过内嵌 runtime 自检与补齐")
+                return
+
             from runtime_manager import ensure_runtime, get_runtime_status
             status = get_runtime_status()
             logger.info(f"runtime 状态: complete={status['complete']}, python={status['python_version']}")

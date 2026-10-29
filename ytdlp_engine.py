@@ -31,8 +31,11 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 # 画质档位 → 期望的最大视频高度（None = 不限制，取最高）
+# 这里是「用户想要的档位」，不是「视频提供的档位」；后者见 list_levels()
 QUALITY_HEIGHTS: dict[str, Optional[int]] = {
     "最高": None,
+    "4K": 2160,
+    "2K": 1440,
     "1080P": 1080,
     "720P": 720,
     "480P": 480,
@@ -353,6 +356,156 @@ def format_selector(quality: str, file_format: str) -> str:
     )
 
 
+def level_format(level: Optional[dict], quality: str, file_format: str) -> str:
+    """已解析出具体档位时按该档位的流走，否则退回按档位名近似匹配
+
+    显式档位一律「精确档」：宁可报错也不要用 height<= 的天花板写法——那会让
+    「选了 1080P、账号只能给 480P」静默下成 480P，正是本功能要消灭的行为。
+    档位也可能来自另一个后端（B 站原生只给 height，没有 selector），所以这里
+    必须能吃 height，否则跨后端降级时会被 format_selector 猜成默认 720P。
+    """
+    if file_format in AUDIO_FORMATS:
+        return "bestaudio/best"
+    selector = str((level or {}).get("selector") or "")
+    if selector:
+        return selector
+    height = int((level or {}).get("pixels") or level.get("height") or 0) if level else 0
+    if height:
+        return f"bestvideo[height={height}]+bestaudio/best[height={height}]"
+    return format_selector(quality, file_format)
+
+
+# =====================================================================
+# 该链接实际提供的清晰度档位
+# =====================================================================
+
+
+def short_edge(fmt: dict) -> int:
+    """短边像素：竖屏视频（1080x1920）按 1080 归档，不会被误标成 2K"""
+    h = int(fmt.get("height") or 0)
+    w = int(fmt.get("width") or 0)
+    if h and w:
+        return min(h, w)
+    return h or w
+
+
+def fps_of(fmt: dict) -> int:
+    try:
+        return int(round(float(fmt.get("fps") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def bitrate_of(fmt: dict) -> float:
+    for key in ("tbr", "bitrate", "vbr", "abr"):
+        value = fmt.get(key)
+        try:
+            if value:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def level_label(height: Optional[int], fps: int = 0, hdr: bool = False) -> str:
+    """(短边高度, 帧率, HDR) → 档位名，与站点播放器的叫法对齐"""
+    h = int(height or 0)
+    if h >= 2160:
+        base = "4K"
+    elif h >= 1440:
+        base = "2K"
+    elif h > 0:
+        base = f"{h}P"
+    else:
+        base = "未知"
+    if fps >= 50:
+        base = f"{base} {fps}帧"
+    if hdr:
+        base = f"{base} HDR"
+    return base
+
+
+def build_levels(info: dict) -> list[dict]:
+    """yt-dlp 的 formats 列表 → 本视频真实可选的档位
+
+    同一 (短边高度, 帧率, 动态范围) 下往往有 avc1/vp9/av01 多条流：取码率最高的
+    那条。「1080P 高码率」这类档位只有按码率选才会浮现，按默认 bestvideo 排序
+    会优先给到编码更省的新 codec，高码率档等于被吞掉。
+    """
+    formats = info.get("formats") or []
+    videos = [f for f in formats
+              if (f.get("vcodec") or "none") != "none" and f.get("format_id")]
+    if not videos:
+        return []
+    audios = [f for f in formats
+              if (f.get("acodec") or "none") != "none" and f.get("format_id")]
+    # YouTube 的 *-drc 是响度压缩过的副本，码率更高但不是原声
+    plain = [f for f in audios if "-drc" not in str(f.get("format_id"))]
+    best_audio = max(plain or audios, key=bitrate_of) if audios else None
+
+    groups: dict[tuple, list[dict]] = {}
+    for fmt in videos:
+        key = (short_edge(fmt), fps_of(fmt), str(fmt.get("dynamic_range") or "").upper())
+        groups.setdefault(key, []).append(fmt)
+
+    levels: list[dict] = []
+    for (height, fps, drange), group in groups.items():
+        best = max(group, key=bitrate_of)
+        hdr = "HDR" in drange
+        video_id = str(best.get("format_id"))
+        if best_audio is not None and best_audio is not best:
+            selector = f"{video_id}+{best_audio['format_id']}"
+        else:
+            selector = video_id
+        # 站点偶发换 format id（解析后重取）：兜底链也锁死同一高度，不允许降档
+        pixels = int(best.get("height") or height or 0)
+        if pixels:
+            selector += f"/bestvideo[height={pixels}]+bestaudio/best[height={pixels}]"
+        levels.append({
+            "label": level_label(height, fps, hdr),
+            "height": height,
+            "pixels": pixels,
+            "fps": fps,
+            "hdr": hdr,
+            "selector": selector,
+            "qn": None,
+            "available": True,
+            "reason": "",
+        })
+    levels.sort(key=lambda lv: (lv["height"], lv["fps"]), reverse=True)
+    _dedupe_labels(levels)
+    return levels
+
+
+def _dedupe_labels(levels: list[dict]) -> None:
+    """同分辨率不同帧率（144P 的 15帧 / 30帧两条）会撞名：补帧率区分"""
+    counts: dict[str, int] = {}
+    for level in levels:
+        counts[level["label"]] = counts.get(level["label"], 0) + 1
+    for level in levels:
+        label = level["label"]
+        if counts[label] > 1 and level["fps"] and str(level["fps"]) not in label:
+            level["label"] = f"{label} {level['fps']}帧"
+
+
+def pick_default_level(levels: list[dict], tier: Optional[str]) -> Optional[dict]:
+    """把设置的默认档位落到视频真实提供的档位上
+
+    - 默认高于视频最高档 → 取视频最高档（默认 1080P 但老片只有 480P 的场景）
+    - 默认低于视频最低档 → 取视频最低档（不下探到不存在的档）
+    - 只在实际能取到的档位里挑（B 站未登录时 1080P 是「有但拿不到」）
+    """
+    usable = [lv for lv in levels if lv.get("available", True)] or list(levels or [])
+    if not usable:
+        return None
+    usable.sort(key=lambda lv: (int(lv.get("height") or 0), int(lv.get("fps") or 0)))
+    limit = QUALITY_HEIGHTS.get(str(tier or ""), QUALITY_HEIGHTS[DEFAULT_QUALITY])
+    if limit is None:
+        return usable[-1]
+    at_or_below = [lv for lv in usable if int(lv.get("height") or 0) <= limit]
+    return at_or_below[-1] if at_or_below else usable[0]
+
+
 _AUDIO_CODEC = {"mp3": "libmp3lame", "wav": "pcm_s16le"}
 
 
@@ -474,6 +627,41 @@ def probe(url: str, timeout: int = 30) -> dict:
     return result
 
 
+def list_levels(url: str) -> dict:
+    """解析该链接实际提供的所有清晰度档位 + 标题（不下载）
+
+    formats 是一次解析就能拿到的字段，不需要额外请求。返回的档位由高到低排序，
+    供 UI 直接作为可选项，避免「视频根本没有 1080P 却让用户选 1080P」。
+    """
+    _require_engine()
+    YoutubeDL = _load_module().YoutubeDL
+    opts = _base_opts()
+    opts.update({"skip_download": True, "format": None})
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise EngineError(_friendly_error(e)) from e
+    if not info:
+        raise EngineError("该链接没有可下载的内容")
+    entries = info.get("entries")
+    if entries:
+        info = next((e for e in entries if e), None) or info
+    meta = _clean_info(info)
+    levels = build_levels(info)
+    logger.info(
+        f"[引擎] 档位解析: {meta['extractor']} | {meta['title']} | "
+        f"{' / '.join(lv['label'] for lv in levels) or '无视频流'}"
+    )
+    return {
+        "title": meta["title"],
+        "extractor": meta["extractor"],
+        "duration": meta["duration"],
+        "thumbnail": meta["thumbnail"],
+        "levels": levels,
+    }
+
+
 def resolve_stream(url: str, prefer: str = "worst") -> dict:
     """解析一条可直接播放的直链（预览用）+ 请求头
 
@@ -526,6 +714,7 @@ def download(
     *,
     quality: str = DEFAULT_QUALITY,
     file_format: str = "mp4",
+    level: Optional[dict] = None,
     out_dir: str,
     temp_dir: str,
     channels: str = "双声道",
@@ -534,6 +723,7 @@ def download(
 ) -> dict:
     """下载并后处理，返回 {filepath, title, extractor, duration, bytes}
 
+    level 为 list_levels() 给出的具体档位（含 selector）；缺省时按 quality 档位名近似匹配。
     progress_hook 收到 yt-dlp 原始进度 dict（status: downloading/finished/error），
     字段含义见 yt-dlp 文档：downloaded_bytes / total_bytes / speed / eta。
     """
@@ -550,7 +740,7 @@ def download(
         postprocessor_hooks=[postprocessor_hook] if postprocessor_hook else None,
     )
     opts.update({
-        "format": format_selector(quality, file_format),
+        "format": level_format(level, quality, file_format),
         # outtmpl 用相对模板 + paths.home 指定输出目录：这样 paths.temp 才会生效
         # （绝对路径写进 outtmpl 时 yt-dlp 会忽略 --paths，分片会落在输出目录）
         "outtmpl": {"default": "%(title)s [%(id)s].%(ext)s"},
@@ -659,7 +849,10 @@ _UNSUPPORTED_HINTS = (
     ("getaddrinfo failed", "域名解析失败，请检查 DNS 或代理设置"),
     ("Unable to download webpage", "无法访问该网页，请检查网络/代理，或该站点需要登录 Cookie"),
     ("Failed to decrypt", "媒体流解密失败，请尝试更新下载引擎"),
-    ("Requested format is not available", "该站点没有符合所选画质的格式，已尝试降级"),
+    ("Requested format is not available", "该视频没有这个清晰度档位（可选档位见链接卡片右键菜单）"),
+    # 磁盘被移除/换盘符时，yt-dlp 扫描 PATH 会抛这个系统错误，原文看不懂
+    ("WinError 1005", "本机有磁盘不可访问（PATH 或设置里残留了已移除的盘符），请清理后重启应用"),
+    ("此卷不包含可识别的文件系统", "本机有磁盘不可访问（PATH 或设置里残留了已移除的盘符），请清理后重启应用"),
 )
 
 

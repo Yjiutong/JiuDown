@@ -68,12 +68,10 @@ _CAPTION_TOOLTIPS = {
 
 
 def _app_icon_path() -> str:
-    """ico 资源路径（开发期 = 项目根；打包后 = exe 同级）"""
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
-    else:
-        base = Path(__file__).resolve().parent
-    return str(base / "resources" / "app.ico")
+    """ico 资源路径（相对程序自身所在目录，整个文件夹挪走也找得到）"""
+    from system_info import system_info
+
+    return str(system_info.get_app_root() / "resources" / "app.ico")
 
 
 _APP_ICON: QIcon | None = None

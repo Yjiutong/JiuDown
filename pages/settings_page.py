@@ -20,6 +20,7 @@ from config_manager import config_manager
 from pages.download_page import FORMATS
 from pages.home_page import HomePage
 from pages.log_page import LogPage
+from system_info import system_info
 
 LOG_LEVELS = ["info", "warning", "error", "debug", "silent"]
 QUALITIES = jiudown_engine.QUALITY_CHOICES
@@ -210,7 +211,9 @@ class SettingsPage(QWidget):
         row.addStretch()
         card_vbox.addLayout(row)
         self.restful_port = QSpinBox()
-        self.restful_port.setRange(1024, 49151)
+        # 上限必须覆盖 64001：RESTful 端口固定就是 64001（config schema 里就是这么校验的），
+        # 用 49151 的话 setValue 会被静默夹到 49151，进设置页再保存一次就把配置写坏了
+        self.restful_port.setRange(1024, 65535)
         row = self._form_row("RESTful API 端口", self.restful_port)
         row.addStretch()
         card_vbox.addLayout(row)
@@ -306,6 +309,10 @@ class SettingsPage(QWidget):
         row = self._form_row("默认清晰度", self.default_quality)
         row.addStretch()
         card_vbox.addLayout(row)
+        card_vbox.addWidget(self._make_hint_label(
+            "回车生成链接卡片后会解析该视频实际提供的档位，默认值作为上限："
+            "高于视频最高档时取最高档，低于最低档时取最低档"
+        ))
         self.default_format = QComboBox()
         self.default_format.addItems(FORMATS)
         row = self._form_row("默认格式", self.default_format)
@@ -489,9 +496,10 @@ class SettingsPage(QWidget):
         self.restful_port.setValue(int(ports.get("restful-api", 64001)))
 
         task = current.get("download-task", {})
-        self.temp_dir_input.setText(task.get("temp-dir", ""))
-        self.download_dir_input.setText(task.get("download-dir", ""))
-        self.ffmpeg_path_input.setText(task.get("ffmpeg-path", ""))
+        self.temp_dir_input.setText(system_info.from_config_path(task.get("temp-dir", "")))
+        self.download_dir_input.setText(
+            system_info.from_config_path(task.get("download-dir", "")))
+        self.ffmpeg_path_input.setText(system_info.from_config_path(task.get("ffmpeg-path", "")))
         self.max_tasks.setValue(int(task.get("max-task", 2)))
         self.default_quality.setCurrentText(task.get("quality", "720P"))
         self.default_format.setCurrentText(task.get("format", "mp4"))
@@ -611,6 +619,8 @@ class SettingsPage(QWidget):
         state = ffmpeg_manager.get_status()
         status = state["status"]
         version = state.get("version") or ""
+        # 用的是系统 PATH 上的 ffmpeg 时讲明白：它不是我们下的，也不会再去下
+        src = "（来自系统 PATH）" if state.get("source") == ffmpeg_manager.SOURCE_PATH else ""
         if status == "downloading":
             percent = int(state.get("progress", 0) * 100)
             self.ffmpeg_status_label.setText(
@@ -621,16 +631,16 @@ class SettingsPage(QWidget):
             self.ffmpeg_download_btn.setEnabled(False)
         elif status == "full":
             self.ffmpeg_status_label.setText(
-                f"完整版 FFmpeg {version}：全部格式可用" if version
-                else "完整版 FFmpeg：全部格式可用"
+                f"完整版 FFmpeg {version}{src}：全部格式可用" if version
+                else f"完整版 FFmpeg{src}：全部格式可用"
             )
             self.ffmpeg_progress.hide()
             self.ffmpeg_download_btn.setEnabled(False)
             self.ffmpeg_download_btn.setText("已是完整版")
         elif status == "ready":
             self.ffmpeg_status_label.setText(
-                f"精简版 FFmpeg {version}：下载所需能力齐备（可选升级完整版）"
-                if version else "精简版 FFmpeg：下载所需能力齐备（可选升级完整版）"
+                f"精简版 FFmpeg {version}{src}：下载所需能力齐备（可选升级完整版）"
+                if version else f"精简版 FFmpeg{src}：下载所需能力齐备（可选升级完整版）"
             )
             self.ffmpeg_progress.hide()
             self.ffmpeg_download_btn.setEnabled(True)
@@ -639,8 +649,8 @@ class SettingsPage(QWidget):
             feats = ffmpeg_manager.missing_features()
             detail = " / ".join(feats) if feats else "部分能力"
             self.ffmpeg_status_label.setText(
-                f"当前 FFmpeg {version}：{detail} 不可用（可升级完整版）"
-                if version else f"当前 FFmpeg：{detail} 不可用（可升级完整版）"
+                f"当前 FFmpeg {version}{src}：{detail} 不可用（可升级完整版）"
+                if version else f"当前 FFmpeg{src}：{detail} 不可用（可升级完整版）"
             )
             self.ffmpeg_progress.hide()
             self.ffmpeg_download_btn.setEnabled(True)

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "build": "20261023-154610",
+  "build": "20261029-182836",
   "engine_version": "2026.10.21",
   "max_component_bytes": 104857600,
   "groups": [
@@ -13,21 +13,21 @@
     "app": {
       "file": "app.zip",
       "size": 3454689,
-      "sha256": "deb54514e585e52d04f5ac222ad03cb84adcab2f03a05919316757e4a01fd498",
+      "sha256": "b786742d2ab6ceee2a516f58162390788608a20dc14f2c1cca564a9a1c8ce0c5",
       "files": 765,
       "group": "app"
     },
     "core": {
       "file": "core.zip",
       "size": 13152661,
-      "sha256": "9af454932ea8f6997d9f4a3dbb6b9b44ff82eb6d4d6bbd6e16ea0fdfcac9582c",
+      "sha256": "4e0cbbc448f0683ae57996e3c63c560a0a2bbd8da349b01d8794bccd70b515d9",
       "files": 82,
       "group": "core"
     },
     "engine": {
       "file": "engine.zip",
       "size": 5415249,
-      "sha256": "cc74ab4bae9ba2464b1a415df0a28a966bf39e6b8a1c1a45fe80f1e9d9829de7",
+      "sha256": "63fd8d094669451c5d3955665eab2ebee57841e81ac155dcff664fc0c6b8a01c",
       "files": 1529,
       "group": "engine"
     },
