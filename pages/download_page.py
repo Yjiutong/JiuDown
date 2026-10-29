@@ -4,6 +4,7 @@
 """
 
 import queue
+import re
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -97,6 +98,45 @@ PROGRESS_COLOR = {
 PARSING_HINT = "正在解析标题与该视频提供的清晰度…"
 
 
+def _pasted_links(source) -> list[str]:
+    """从剪贴板的 MIME 数据里取出真实链接
+
+    QTextEdit 默认粘贴会把 <a href="URL">标题</a> 只留下可见文字，href 当场丢弃。
+    从网页/浏览器复制"带链接的标题"（B 站视频页标题、列表项都是这种）时，用户粘的
+    确实是链接，但进到输入框里已经只剩标题文字，后面再怎么放宽解析也救不回来。
+    """
+    links: list[str] = []
+    try:
+        for url in source.urls():
+            text = url.toString().strip()
+            if text.lower().startswith(("http://", "https://")):
+                links.append(text)
+    except Exception:
+        pass
+    if links:
+        return links
+    try:
+        html = source.html() if source.hasHtml() else ""
+    except Exception:
+        html = ""
+    if html:
+        return re.findall(r"href=[\"']\s*(https?://[^\"'\s>]+)", html, flags=re.I)
+    return links
+
+
+# 网页标题的常见尾巴：粘贴里既没链接也没 BV/av 号时用它判断"用户粘的是标题"，
+# 好把提示写到点子上（去复制地址栏或分享链接），而不是泛泛一句"无效"。
+# 只认结尾形态：裸 "bilibili" 会把"去bilibili看视频"也误判成标题。
+_TITLE_SUFFIXES = ("_哔哩哔哩_bilibili", "-哔哩哔哩", "_bilibili",
+                   "- youtube", "| youtube", "_youtube",
+                   "- 抖音", "_抖音", "- 微博", "| 微博")
+
+
+def _looks_like_page_title(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return any(low.endswith(t) for t in _TITLE_SUFFIXES)
+
+
 class UrlInputEdit(QTextEdit):
     """链接输入框：按回车将当前全部非空行提交为标签卡（Shift+Enter 换行）"""
 
@@ -110,6 +150,14 @@ class UrlInputEdit(QTextEdit):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source) -> None:
+        """粘贴：优先落回链接本身，而不是超链接的显示文字"""
+        links = _pasted_links(source) if source is not None else []
+        if links:
+            self.insertPlainText("\n".join(links))
+            return
+        super().insertFromMimeData(source)
 
 
 class _DeleteIconButton(QPushButton):
@@ -889,6 +937,18 @@ class DownloadPage(QWidget):
 
     # ---------------------------------------------------------------- 标签
 
+    def _set_hint(self, text: str, error: bool = False) -> None:
+        """提示语：失败时切成红色错误态
+
+        粘贴了标题这类情况，用户预期是"应该出卡片"，一行灰色小字会被当成界面卡住
+        而反复按回车（实测连按 7 次）。反馈必须显眼到不可能看漏。
+        """
+        self.tag_hint.setText(text)
+        self.tag_hint.setProperty("muted", "false" if error else True)
+        self.tag_hint.setProperty("cssClass", "taskError" if error else "")
+        self.tag_hint.style().unpolish(self.tag_hint)
+        self.tag_hint.style().polish(self.tag_hint)
+
     def _commit_lines(self, text: str) -> None:
         """回车：把输入框里的有效链接按当前参数快照固定为链接卡片
 
@@ -900,7 +960,7 @@ class DownloadPage(QWidget):
             self._commit_lines_inner(text)
         except Exception as e:
             logger.exception("生成链接卡片失败")
-            self.tag_hint.setText(f"生成卡片时出错：{e}")
+            self._set_hint(f"生成卡片时出错：{e}", error=True)
 
     def _commit_lines_inner(self, text: str) -> None:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -911,16 +971,23 @@ class DownloadPage(QWidget):
             url = normalize_url(line)
             (urls if url else rejected).append(url or line)
         if not urls:
-            sample = rejected[0][:60] if rejected else ""
+            raw = rejected[0] if rejected else ""
             # 完整原文用 repr 记一条：截断会正好切掉链接，且 repr 能露出零宽字符
-            logger.warning(
-                f"回车内容未包含可识别的链接: {repr(rejected[0] if rejected else '')[:400]}"
-            )
-            self.tag_hint.setText(
-                f"没有识别到链接：{sample!r}\n"
-                "请粘贴以 http(s):// 开头的视频地址（一行一个），"
-                "或带 BV/av 号的 B 站分享文本"
-            )
+            logger.warning(f"回车内容未包含可识别的链接: {repr(raw)[:400]}")
+            if _looks_like_page_title(raw):
+                self._set_hint(
+                    "这看起来是网页标题，不是链接 —— 里面既没有网址也没有 BV/av 号。\n"
+                    "请复制浏览器地址栏里的网址（https://www.bilibili.com/video/BV…），"
+                    "或在视频页点「分享」→「复制链接」后粘贴，一行一个。",
+                    error=True,
+                )
+            else:
+                self._set_hint(
+                    f"没有识别到链接：{raw[:60]!r}\n"
+                    "请粘贴以 http(s):// 开头的视频地址（一行一个），"
+                    "或带 BV/av 号的 B 站分享文本",
+                    error=True,
+                )
             return
         quality = self.quality_select.currentText()
         file_format = self.format_select.currentText()
@@ -929,7 +996,7 @@ class DownloadPage(QWidget):
         self.url_input.clear()
         self._update_tag_hint()
         if rejected:
-            self.tag_hint.setText(
+            self._set_hint(
                 f"已添加 {len(urls)} 个链接，忽略 {len(rejected)} 行无法识别的内容："
                 f"{rejected[0][:40]!r}"
             )
@@ -1030,13 +1097,14 @@ class DownloadPage(QWidget):
         self.preview_panel.load_online_url(url)
 
     def _update_tag_hint(self) -> None:
+        # 走 _set_hint：成功提交后要把上一轮的红色错误提示恢复成常规样式
         if self._tag_cards:
-            self.tag_hint.setText(
+            self._set_hint(
                 f"已固定 {len(self._tag_cards)} 个链接 · 悬停预览低清画面 · "
                 "右键选清晰度/查看链接 · 双击恢复文本 · 点击“开始下载”加入队列"
             )
         else:
-            self.tag_hint.setText(
+            self._set_hint(
                 "回车生成链接卡片：自动解析标题，清晰度只列该视频真正提供的档位；"
                 "右键可查看原链接，双击恢复文本"
             )

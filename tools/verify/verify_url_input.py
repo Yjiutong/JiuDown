@@ -63,25 +63,83 @@ for name, raw in [("空行", "   "), ("纯中文", "今天天气不错"), ("无�
     ck(f"应判为无效/{name}", normalize_url(raw) == "", repr(normalize_url(raw)))
 
 app = QApplication.instance() or QApplication([])
-from pages.download_page import DownloadPage  # noqa: E402
+from PySide6.QtCore import QMimeData  # noqa: E402
+
+from pages.download_page import DownloadPage, UrlInputEdit, _pasted_links  # noqa: E402
+
+# 粘贴"带链接的标题"：剪贴板是 <a href="URL">标题</a>，QTextEdit 默认只留可见文字，
+# href 在进输入框之前就被丢掉——用户粘的确实是链接，看到的却是标题。
+TITLE = "[AI绘图简史04]开源与闭源的三次交锋?_哔哩哔哩_bilibili"
+LINKED = QMimeData()
+LINKED.setHtml(f'<a href="{URL}">{TITLE}</a>')
+LINKED.setText(TITLE)
+ck("粘贴取 href", _pasted_links(LINKED) == [URL], str(_pasted_links(LINKED)))
+box = UrlInputEdit()
+box.insertFromMimeData(LINKED)
+ck("粘贴后框内是链接不是标题", box.toPlainText() == URL, repr(box.toPlainText()))
+
+PLAIN = QMimeData()
+PLAIN.setText(URL)
+box_p = UrlInputEdit()
+box_p.insertFromMimeData(PLAIN)
+ck("纯文本粘贴不受影响", box_p.toPlainText() == URL, repr(box_p.toPlainText()))
+
+MULTI = QMimeData()
+MULTI.setHtml(f'<a href="{URL}">A</a><a href="https://b23.tv/xyz">B</a>')
+MULTI.setText("AB")
+box_m = UrlInputEdit()
+box_m.insertFromMimeData(MULTI)
+ck("多个链接一行一个", box_m.toPlainText() == f"{URL}\nhttps://b23.tv/xyz",
+   repr(box_m.toPlainText()))
+
+NOHREF = QMimeData()
+NOHREF.setText("就是没有链接的一行中文")
+box_n = UrlInputEdit()
+box_n.insertFromMimeData(NOHREF)
+ck("无链接粘贴走默认路径", box_n.toPlainText() == "就是没有链接的一行中文")
 
 page = DownloadPage()
 page.show()
 app.processEvents()
 
-# 带零宽字符的一行：必须照样生成卡片
+# 真实链路：粘贴带链接的标题 → 回车 → 必须出卡片
+page.url_input.insertFromMimeData(LINKED)
+page._commit_lines(page.url_input.toPlainText())
+app.processEvents()
+ck("粘贴带链接标题后回车生成卡片", len(page._tag_cards) == 1,
+   f"卡片数={len(page._tag_cards)}")
 page._commit_lines(f"​{URL}")
 app.processEvents()
-ck("回车生成卡片（含零宽字符）", len(page._tag_cards) == 1,
+ck("回车生成卡片（含零宽字符）", len(page._tag_cards) == 2,
    f"卡片数={len(page._tag_cards)}")
-ck("输入框已清空", page.url_input.toPlainText() == "")
+ck("输入框已被提交逻辑清空", page.url_input.toPlainText() == "")
 
 # 无法识别的一行：必须给出可见提示，且不能抛异常出去
+from pages.download_page import _looks_like_page_title  # noqa: E402
+
+ck("标题形态判定", _looks_like_page_title(TITLE)
+   and not _looks_like_page_title("今天天气不错")
+   and not _looks_like_page_title("去bilibili看视频"))
+
 page._commit_lines("今天天气不错")
 app.processEvents()
 hint = page.tag_hint.text()
 ck("无效输入给出可见提示", "没有识别到链接" in hint, hint[:40])
-ck("无效输入不生成卡片", len(page._tag_cards) == 1)
+ck("无效输入不生成卡片", len(page._tag_cards) == 2)
+ck("提示语进入错误态", page.tag_hint.property("cssClass") == "taskError",
+   str(page.tag_hint.property("cssClass")))
+
+# 纯标题粘贴（无 href 无 BV）：要说到"粘的是标题"，而不是泛泛一句无效
+page._commit_lines(TITLE)
+app.processEvents()
+ck("标题粘贴给出针对性提示", "网页标题" in page.tag_hint.text(),
+   page.tag_hint.text()[:30])
+
+# 成功一次之后必须退出错误态
+page._commit_lines(URL)
+app.processEvents()
+ck("成功后退出错误提示态", page.tag_hint.property("cssClass") == ""
+   and len(page._tag_cards) == 3, f"cssClass={page.tag_hint.property('cssClass')!r}")
 
 # 槽内异常必须被兜住并显示出来（模拟 _add_tag 抛错）
 page._add_tag = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
