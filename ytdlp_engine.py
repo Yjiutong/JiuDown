@@ -155,8 +155,18 @@ class EngineError(RuntimeError):
 # 否则 "…/abc\u00a0tail" 会被粘成一个不存在的 URL。
 _ZERO_WIDTH_RE = re.compile("[\\u200b-\\u200f\\u202a-\\u202e\\u2060\\ufeff]")
 _SPACE_LIKE_RE = re.compile("[\\u00a0\\u3000]")
-_URL_RE = re.compile(r"https?://[^\s\"'<>【】（）]+", re.IGNORECASE)
-_BARE_HOST_RE = re.compile(r"(?:https?://)?[\w-]+(?:\.[\w-]+)+(?::\d+)?(?:[/?#][^\s\"'<>【】（）]*)?")
+# URL 只由 ASCII 合法字符组成：字符集写宽了会把紧跟其后的中文（"…abc123，快来看"）
+# 一起吞进来，而 rstrip 只能去尾巴、去不掉夹在中间的标点。
+_URL_CHARS = r"A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%"
+_URL_RE = re.compile(f"https?://[{_URL_CHARS}]+", re.IGNORECASE)
+_BARE_HOST_RE = re.compile(f"(?:https?://)?[\\w-]+(?:\\.[\\w-]+)+(?::\\d+)?(?:[{_URL_CHARS}]+)?")
+
+
+# 分享文本里 URL 常被括号或句号包着，末尾这些符号不属于地址本身
+_TRAILING_JUNK = ".,;:!?)]}'”’"
+
+_BV_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
+_AV_RE = re.compile(r"\bav(\d{4,})", re.IGNORECASE)
 
 
 def normalize_url(raw: str) -> str:
@@ -164,21 +174,28 @@ def normalize_url(raw: str) -> str:
 
     容忍三种真实输入：粘贴时混进零宽字符/BOM；链接前后带着标题或
     「来自 微博网页版」这类分享尾巴；只有域名没有协议（www.bilibili.com/video/BV…）。
-    旧实现要求整行就是一个 URL，带尾巴的分享文本会被整行判为无效而静默不生成卡片。
+    B 站分享文本经常只带 BV/av 号不带链接，这种情况直接拼出视频页地址——
+    否则用户粘贴标题看到"没有识别到链接"，完全不知道哪里不对。
     """
     text = _SPACE_LIKE_RE.sub(" ", _ZERO_WIDTH_RE.sub("", raw or "")).strip().strip("\"'“”‘’")
     if not text:
         return ""
     match = _URL_RE.search(text)
     if match:
-        return match.group().rstrip(".,;:、。）)")
+        return match.group().rstrip(_TRAILING_JUNK)
     match = _BARE_HOST_RE.search(text)
-    if not match:
-        return ""
-    url = match.group()
-    if not url.lower().startswith(("http://", "https://")):
-        url = "https://" + url
-    return url.rstrip(".,;:、。）)")
+    if match:
+        url = match.group()
+        if not url.lower().startswith(("http://", "https://")):
+            url = "https://" + url
+        return url.rstrip(_TRAILING_JUNK)
+    bv = _BV_RE.search(text)
+    if bv:
+        return f"https://www.bilibili.com/video/{bv.group(1)}"
+    av = _AV_RE.search(text)
+    if av:
+        return f"https://www.bilibili.com/video/av{av.group(1)}"
+    return ""
 
 
 # =====================================================================

@@ -47,6 +47,13 @@ cases = [
     ("带引号", f'"{URL}"', URL),
     ("只有域名", "www.bilibili.com/video/BV1GJ", "https://www.bilibili.com/video/BV1GJ"),
     ("带端口与查询", "https://example.com:8443/watch?v=1", "https://example.com:8443/watch?v=1"),
+    ("B站分享全文", f"【B站】[AI绘图简史04]开源与闭源 {URL}/?spm_id_from=333.788.share",
+     f"{URL}/?spm_id_from=333.788.share"),
+    ("只有 BV 号无链接", "[AI绘图简史04]开源与闭源 BV1yE421X7je",
+     "https://www.bilibili.com/video/BV1yE421X7je"),
+    ("只有 av 号无链接", "看这个 av170001", "https://www.bilibili.com/video/av170001"),
+    ("中文逗号尾巴", f"{URL}，快来看看", URL),
+    ("全角右括号尾巴", f"{URL}）", URL),
 ]
 for name, raw, want in cases:
     got = normalize_url(raw)

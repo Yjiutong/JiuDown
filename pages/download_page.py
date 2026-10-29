@@ -912,10 +912,14 @@ class DownloadPage(QWidget):
             (urls if url else rejected).append(url or line)
         if not urls:
             sample = rejected[0][:60] if rejected else ""
-            logger.warning(f"回车内容未包含可识别的链接: {sample!r}")
+            # 完整原文用 repr 记一条：截断会正好切掉链接，且 repr 能露出零宽字符
+            logger.warning(
+                f"回车内容未包含可识别的链接: {repr(rejected[0] if rejected else '')[:400]}"
+            )
             self.tag_hint.setText(
                 f"没有识别到链接：{sample!r}\n"
-                "请粘贴以 http(s):// 开头的视频地址（一行一个）"
+                "请粘贴以 http(s):// 开头的视频地址（一行一个），"
+                "或带 BV/av 号的 B 站分享文本"
             )
             return
         quality = self.quality_select.currentText()
