@@ -162,7 +162,8 @@ def _capture_menu():
         return
     captured["submenus"] = [a.menu().title() for a in popup.actions() if a.menu()]
     captured["quality_items"] = [
-        a.text() for a in popup.actions() if a.menu() and "质量" in a.menu().title()
+        a.text() for a in popup.actions()
+        if a.menu() and ("清晰度" in a.menu().title() or "质量" in a.menu().title())
         for a in a.menu().actions()
     ]
     captured["plain"] = [a.text() for a in popup.actions() if not a.menu() and a.text()]
@@ -174,8 +175,9 @@ card.contextMenuEvent(_FakeEvent())
 
 ck("右键菜单已弹出", "submenus" in captured, captured.get("error", ""))
 if "submenus" in captured:
-    ck("菜单含格式与质量两个子菜单", len(captured["submenus"]) >= 2, captured["submenus"])
-    ck("质量子菜单含 5 档画质", captured["quality_items"] == QUALITIES,
+    ck("菜单含格式与清晰度两个子菜单", len(captured["submenus"]) >= 2, captured["submenus"])
+    # 未解析出档位时退回引擎的粗档位全集（含 4K/2K，共 7 档）
+    ck("未解析出的卡片退回全量粗档位", captured["quality_items"] == QUALITIES,
        captured["quality_items"])
     ck("菜单含预览与删除",
        "预览" in captured["plain"] and "删除" in captured["plain"], captured["plain"])
@@ -217,6 +219,18 @@ if os.environ.get("JIUDOWN_SKIP_NET") == "1":
     print("SKIP 端到端下载（JIUDOWN_SKIP_NET=1）")
 else:
     URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4"
+
+    # 这台第三方测试主机偶尔会 403（实测遇到过）：那是环境问题，不该记成应用失败
+    def host_reachable() -> bool:
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(URL, timeout=15) as resp:
+                return 200 <= resp.status < 400
+        except Exception as e:
+            print(f"SKIP 端到端下载（{URL.split('/')[2]} 不可达：{type(e).__name__} {e}）")
+            return False
+
     progress_seen = []
 
     async def e2e():
@@ -240,7 +254,8 @@ else:
         if task["output_path"] and os.path.exists(task["output_path"]):
             os.remove(task["output_path"])
 
-    asyncio.run(e2e())
+    if host_reachable():
+        asyncio.run(e2e())
 
 print(f"\n===== {sum(checks)} passed, {len(checks) - sum(checks)} failed =====")
 sys.stdout.flush()

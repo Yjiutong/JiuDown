@@ -148,6 +148,35 @@ app.processEvents()
 ck("槽内异常不静默", "生成卡片时出错" in page.tag_hint.text()
    and "boom" in page.tag_hint.text(), page.tag_hint.text()[:50])
 
+# 取不到的档位不得出现在清晰度菜单里（选了却下不到只会造成误判）
+from PySide6.QtWidgets import QMenu  # noqa: E402
+
+card = page._tag_cards[0]
+card.file_format = "mp4"
+card.levels = [
+    {"label": "1080P 高码率", "height": 1080, "fps": 0, "qn": 112,
+     "selector": None, "available": False, "reason": "需大会员"},
+    {"label": "480P 标清", "height": 480, "fps": 25, "qn": 32,
+     "selector": None, "available": True, "reason": ""},
+    {"label": "360P 流畅", "height": 360, "fps": 25, "qn": 16,
+     "selector": None, "available": True, "reason": ""},
+]
+card.quality = "480P 标清"
+menu = QMenu()
+act = card._build_quality_menu(menu)
+items = [a.text() for a in act.menu().actions()]
+ck("取不到的档不进菜单", items == ["480P 标清", "360P 流畅"], str(items))
+ck("菜单文字不再带标注后缀", all("暂未返回" not in t for t in items), str(items))
+summary = card._levels_summary()
+ck("档位概览只数可取的档", summary.startswith("档位（2）"), summary[:40])
+ck("概览说明被隐藏的档数", "另有 1 档" in summary, summary[:60])
+
+# 全都被过滤光时不能让菜单变空——原样退回
+card.levels = [dict(card.levels[0])]
+menu2 = QMenu()
+items2 = [a.text() for a in card._build_quality_menu(menu2).menu().actions()]
+ck("无一可用时退回全量而非空菜单", items2 == ["1080P 高码率"], str(items2))
+
 print(f"\n===== {len(PASS)} passed, {len(FAIL)} failed =====")
 print("RESULT:", "PASS" if not FAIL else f"FAIL {FAIL}")
 sys.exit(1 if FAIL else 0)

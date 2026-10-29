@@ -137,6 +137,17 @@ def _looks_like_page_title(text: str) -> bool:
     return any(low.endswith(t) for t in _TITLE_SUFFIXES)
 
 
+def _selectable_levels(levels: list[dict]) -> list[dict]:
+    """只列当前真正能取到的档位
+
+    接口"声明有"但没下发流的档位（B 站未登录时的 1080P 这类）不进列表：用户要的是
+    "能选就一定能下到"，多一列选了下不了的档只会造成误判。
+    全都被过滤光时原样返回，宁可给出可选项也不要让菜单变成空的。
+    """
+    got = [lv for lv in levels or [] if lv.get("available", True)]
+    return got or list(levels or [])
+
+
 class UrlInputEdit(QTextEdit):
     """链接输入框：按回车将当前全部非空行提交为标签卡（Shift+Enter 换行）"""
 
@@ -230,8 +241,9 @@ class _DeleteIconButton(QPushButton):
 class TagCard(QFrame):
     """链接卡片：回车即解析标题与该视频真实提供的清晰度档位
 
-    卡片主文字是标题而不是链接（原地址在右键「查看链接」里看）；清晰度只列视频
-    真有的档位——老片没有 1080P 就不出现 1080P，也不再出现下载器够不着的高码率档。
+    卡片主文字是标题而不是链接（原地址在右键「查看链接」里看）；清晰度只列**当前
+    真正取得到**的档位——老片没有 1080P 就不出现 1080P，接口声明了但账号拿不到的
+    （B 站未登录时的高码率/4K）同样不出现，只在概览里报一句被藏了几档。
     悬停超过 0.5 秒仍弹出低清小窗预览。
     """
 
@@ -311,12 +323,13 @@ class TagCard(QFrame):
     def _levels_summary(self) -> str:
         if not self.levels:
             return "该链接没有可选的清晰度档位（按默认档位下载）"
-        locked = [lv for lv in self.levels if not lv.get("available", True)]
-        labels = [lv["label"] for lv in self.levels]
+        shown_levels = _selectable_levels(self.levels)
+        hidden = len(self.levels) - len(shown_levels)
+        labels = [lv["label"] for lv in shown_levels]
         shown = " / ".join(labels[:5]) + (" …" if len(labels) > 5 else "")
         text = f"档位（{len(labels)}）：{shown}"
-        if locked:
-            text += f"（其中 {len(locked)} 档原生链路暂未返回，选中后走通用后端）"
+        if hidden > 0:
+            text += f"（另有 {hidden} 档当前账号取不到，未列入）"
         return text
 
     # ---------------------------------------------------------------- 选择
@@ -458,18 +471,13 @@ class TagCard(QFrame):
                 param_menu.addAction(act)
             return param_menu.menuAction()
 
-        for lv in self.levels:
+        for lv in _selectable_levels(self.levels):
             label = str(lv.get("label") or "")
             act = QAction(label, param_menu)
             act.setCheckable(True)
             act.setChecked(label == current)
             act.setData(lv)
             act.triggered.connect(lambda _=False, lv=lv: self.choose_level(lv))
-            if not lv.get("available", True):
-                # 不置灰：原生链路暂未下发不等于下载不到（通用后端常能取到更高档），
-                # 只在提示里讲清楚，真取不到时下载会明确报错而不是偷偷降档
-                act.setText(f"{label} ·原生暂未返回")
-                act.setToolTip(lv.get("reason") or "原生链路暂未返回该档，选中后由通用后端尝试")
             param_group.addAction(act)
             param_menu.addAction(act)
         return param_menu.menuAction()
@@ -578,7 +586,8 @@ class TaskCard(QFrame):
     def _quality_items(self) -> list[str]:
         if self.format_combo.currentText() in AUDIO_FORMATS:
             return CHANNELS
-        labels = [str(lv.get("label") or "") for lv in self.levels if lv.get("label")]
+        labels = [str(lv.get("label") or "")
+                  for lv in _selectable_levels(self.levels) if lv.get("label")]
         return labels or QUALITIES
 
     def _sync_quality_items(self, keep: str = "") -> None:
@@ -598,24 +607,7 @@ class TaskCard(QFrame):
         self.quality_combo.addItems(items)
         if target in items:
             self.quality_combo.setCurrentText(target)
-        self._apply_level_hints()
         self.quality_combo.blockSignals(False)
-
-    def _apply_level_hints(self) -> None:
-        """原生链路暂未返回的档位：下拉里只挂提示，不置灰
-
-        「原生这次没给」不等于「下载不到」（同档位常能由通用后端取到），置灰会误伤；
-        真取不到时下载会明确报错，不会静默降档。
-        """
-        hints = {
-            str(lv.get("label") or ""): str(lv.get("reason") or "原生链路暂未返回该档")
-            for lv in self.levels if not lv.get("available", True)
-        }
-        for i in range(self.quality_combo.count()):
-            self.quality_combo.setItemData(
-                i, hints.get(self.quality_combo.itemText(i), ""),
-                Qt.ItemDataRole.ToolTipRole,
-            )
 
     def _emit_config(self, *_args) -> None:
         self.config_changed.emit(
