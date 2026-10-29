@@ -148,22 +148,37 @@ class EngineError(RuntimeError):
     """引擎层可读错误：直接展示给用户，不带 yt-dlp 的堆栈噪声"""
 
 
-def normalize_url(raw: str) -> str:
-    """规范化用户输入的链接；无法识别为网址时返回空串
+# 从微信/QQ/网页复制时常见的不可见字符。它们不算 str.isspace()，strip() 去不掉，
+# 会让"看起来是纯链接"的一行判定失败。用显式转义而不是字面字符：这些字符写在源码里
+# 根本看不见，接手的人无从判断。
+# 零宽字符直接删；不换行空格/全角空格是分隔符，必须换成普通空格，
+# 否则 "…/abc\u00a0tail" 会被粘成一个不存在的 URL。
+_ZERO_WIDTH_RE = re.compile("[\\u200b-\\u200f\\u202a-\\u202e\\u2060\\ufeff]")
+_SPACE_LIKE_RE = re.compile("[\\u00a0\\u3000]")
+_URL_RE = re.compile(r"https?://[^\s\"'<>【】（）]+", re.IGNORECASE)
+_BARE_HOST_RE = re.compile(r"(?:https?://)?[\w-]+(?:\.[\w-]+)+(?::\d+)?(?:[/?#][^\s\"'<>【】（）]*)?")
 
-    - 去掉首尾空白与引号
-    - 缺少协议时按域名形态补 https://（如 www.bilibili.com/video/BV…）
-    - 只接受 http/https
+
+def normalize_url(raw: str) -> str:
+    """从一行文本里取出视频链接；取不到时返回空串
+
+    容忍三种真实输入：粘贴时混进零宽字符/BOM；链接前后带着标题或
+    「来自 微博网页版」这类分享尾巴；只有域名没有协议（www.bilibili.com/video/BV…）。
+    旧实现要求整行就是一个 URL，带尾巴的分享文本会被整行判为无效而静默不生成卡片。
     """
-    text = (raw or "").strip().strip("\"'")
+    text = _SPACE_LIKE_RE.sub(" ", _ZERO_WIDTH_RE.sub("", raw or "")).strip().strip("\"'“”‘’")
     if not text:
         return ""
-    if "://" not in text:
-        if re.match(r"^[\w.-]+\.[A-Za-z]{2,}(?:[/?#]|$)", text):
-            text = "https://" + text
-        else:
-            return ""
-    return text if text.startswith(("http://", "https://")) else ""
+    match = _URL_RE.search(text)
+    if match:
+        return match.group().rstrip(".,;:、。）)")
+    match = _BARE_HOST_RE.search(text)
+    if not match:
+        return ""
+    url = match.group()
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    return url.rstrip(".,;:、。）)")
 
 
 # =====================================================================

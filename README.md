@@ -216,6 +216,7 @@ innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tool
 | `verify_runtime.py` / `check_release_zip.py` | 安装脚本不删仓库内组件包、Release 资产 zip 可读 |
 | `verify_engine.py` / `verify_ytdlp.py` / `verify_wav.py` | 双后端路由与降级、进度回调、纯音频只取音频流 |
 | `verify_ffmpeg.py` / `verify_gating.py` | FFmpeg 能力探测与 UI 门控（含系统 PATH 侦测） |
+| `verify_url_input.py` | 粘贴链接的健壮性（零宽字符/BOM/标题前缀/分享尾巴）与出错必须可见 |
 | `verify_install_mode.py` / `check_installed_mode.py` | 便携 / 安装两种形态的数据目录推导与恢复 |
 
 这些脚本一律**由自身位置推导仓库根**，不写死任何绝对路径，可从任意目录调用。
@@ -528,6 +529,9 @@ python -m pdb main.py
 - ✅ **FFmpeg 侦测系统 PATH**：机器上已有能用的 ffmpeg 时直接采用，不再自动下载补齐
 - 🔧 修复：`build_components.py` 在中文控制台打印对勾导致构建成功却报失败；设置页 RESTful
   端口上限低于固定值 64001，保存一次即写坏配置；`save_config` 不清缓存导致改目录需重启
+- 🔧 修复：粘贴链接里的零宽字符/BOM/标题前缀/「来自 微博网页版」尾巴会让回车**静默不生成
+  卡片**（`pythonw` 无控制台，槽内异常也一并静默）；现在从整行中提取 URL，并把无法识别的
+  内容与异常都显示在提示语上
 - 🧹 整理：验证脚本从 `TEMP/` 迁到 `tools/verify/` 并纳入版本管理（其中 11 个原本硬编码了
   已失效的旧盘符），移除 `.trae/` 编辑器目录
 

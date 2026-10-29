@@ -890,14 +890,32 @@ class DownloadPage(QWidget):
     # ---------------------------------------------------------------- 标签
 
     def _commit_lines(self, text: str) -> None:
-        """回车：把输入框里的有效链接按当前参数快照固定为标签卡"""
+        """回车：把输入框里的有效链接按当前参数快照固定为链接卡片
+
+        整个槽包一层异常兜底：应用用 pythonw 启动时没有控制台，Qt 槽里未捕获的
+        异常只会写 stderr（即 /dev/null），表现就是"按回车什么都不发生"且日志里
+        一行都没有。这里把它变成看得见的提示 + 一条日志。
+        """
+        try:
+            self._commit_lines_inner(text)
+        except Exception as e:
+            logger.exception("生成链接卡片失败")
+            self.tag_hint.setText(f"生成卡片时出错：{e}")
+
+    def _commit_lines_inner(self, text: str) -> None:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return
-        urls = [u for u in (normalize_url(line) for line in lines) if u]
+        urls, rejected = [], []
+        for line in lines:
+            url = normalize_url(line)
+            (urls if url else rejected).append(url or line)
         if not urls:
+            sample = rejected[0][:60] if rejected else ""
+            logger.warning(f"回车内容未包含可识别的链接: {sample!r}")
             self.tag_hint.setText(
-                "没有识别到有效链接：请粘贴以 http(s):// 开头的视频地址"
+                f"没有识别到链接：{sample!r}\n"
+                "请粘贴以 http(s):// 开头的视频地址（一行一个）"
             )
             return
         quality = self.quality_select.currentText()
@@ -906,10 +924,10 @@ class DownloadPage(QWidget):
             self._add_tag(u, quality, file_format)
         self.url_input.clear()
         self._update_tag_hint()
-        skipped = len(lines) - len(urls)
-        if skipped:
+        if rejected:
             self.tag_hint.setText(
-                f"已添加 {len(urls)} 个链接，忽略 {skipped} 行无法识别的内容"
+                f"已添加 {len(urls)} 个链接，忽略 {len(rejected)} 行无法识别的内容："
+                f"{rejected[0][:40]!r}"
             )
 
     def _add_tag(self, url: str, quality: str, file_format: str) -> None:
