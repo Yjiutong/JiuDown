@@ -632,7 +632,8 @@ class NativeBilibiliBackend:
                 cmd += ["-i", str(audio)]
             cmd += ["-c", "copy", str(inter)]
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=3600,
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=3600,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if proc.returncode != 0 or not inter.exists():
@@ -646,7 +647,8 @@ class NativeBilibiliBackend:
             cmd += ["-i", str(audio)]
         cmd += ["-c", "copy", str(target)]
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=3600,
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=3600,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if proc.returncode != 0 or not target.exists():

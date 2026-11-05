@@ -24,7 +24,8 @@ def curl_range(start: int, end: int, out: str) -> bytes:
     """curl 取 [start, end] 字节（end 可为负数表示最后 N 字节）"""
     rng = f"{start}-{end}"
     cmd = ["curl", "-sL", "--max-time", "120", "-r", rng, "-o", out, URL]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"curl 失败: {proc.stderr[:200]}")
     return open(out, "rb").read()
@@ -32,7 +33,8 @@ def curl_range(start: int, end: int, out: str) -> bytes:
 
 def head_size() -> int:
     proc = subprocess.run(
-        ["curl", "-sIL", "--max-time", "60", URL], capture_output=True, text=True
+        ["curl", "-sIL", "--max-time", "60", URL], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     total = 0
     for line in proc.stdout.splitlines():

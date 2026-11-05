@@ -585,6 +585,11 @@ def _ffmpeg_convert(
         cmd,
         capture_output=True,
         text=True,
+        # ffmpeg 的 stderr 会原样回显输入文件路径，而产物路径几乎必带中文标题；
+        # 不指定 encoding 时 Python 按 locale(cp936) 解 UTF-8 字节，会抛
+        # UnicodeDecodeError，把"已经下好的任务"报成下载失败
+        encoding="utf-8",
+        errors="replace",
         timeout=60 * 60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -933,6 +938,10 @@ def update_engine(progress_cb: Optional[Callable[[str], None]] = None) -> tuple[
             cmd,
             capture_output=True,
             text=True,
+            # pip 的输出里带 site-packages 路径，应用放在中文目录时同样会撞
+            # cp936 解码，见 _ffmpeg_convert 的说明
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )

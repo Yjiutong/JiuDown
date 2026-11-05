@@ -106,7 +106,8 @@ def is_runtime_complete(check_engine: bool = True) -> bool:
     try:
         result = subprocess.run(
             [str(python_exe), "-c", "import sys; print(sys.version)"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode != 0:
@@ -485,7 +486,8 @@ def get_runtime_status() -> dict:
         try:
             result = subprocess.run(
                 [str(python_exe), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=5,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if result.returncode == 0:

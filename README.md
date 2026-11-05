@@ -218,6 +218,7 @@ innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tool
 | `verify_ffmpeg.py` / `verify_gating.py` | FFmpeg 能力探测与 UI 门控（含系统 PATH 侦测） |
 | `verify_url_input.py` | 粘贴链接的健壮性（零宽字符/BOM/标题前缀/分享尾巴）与出错必须可见 |
 | `verify_douyin_note.py` | 抖音图文：形态识别与路由顺序、无水印原图挑选与逐张候选重试、多图落盘、卡片张数呈现 |
+| `check_subprocess_encoding.py` | 静态扫描：所有 `text=True` 的子进程调用必须显式 `encoding`/`errors`（中文路径下不写会吞掉 ffmpeg 错误信息） |
 | `verify_install_mode.py` / `check_installed_mode.py` | 便携 / 安装两种形态的数据目录推导与恢复 |
 
 这些脚本一律**由自身位置推导仓库根**，不写死任何绝对路径，可从任意目录调用。
@@ -548,6 +549,13 @@ python -m pdb main.py
 - ✅ **彻底可移植**：配置里落在程序目录内的路径统一存 `${APP_ROOT}/...`，程序根目录只有一处
   推导，默认值不再按当前工作目录解析，陈旧绝对路径启动时自愈
 - ✅ **FFmpeg 侦测系统 PATH**：机器上已有能用的 ffmpeg 时直接采用，不再自动下载补齐
+- 🔧 修复：**ffmpeg/pip 的输出按 cp936 解码**。中文 Windows 上 `subprocess.run(text=True)`
+  不带 `encoding` 时，Python 用 locale 编码去解 ffmpeg 的 UTF-8 输出，而 stderr 里必然回显带
+  中文标题的产物路径 → 解码线程抛 `UnicodeDecodeError`，**但 `subprocess.run` 不把这个异常
+  抛给调用方**，只是把 `stderr` 变成 `None`。结果是 ffmpeg 真失败时错误信息退化成
+  "mp3 转换失败：未知错误"，`does not contain any stream` 这类按内容的特判也永远命中不了。
+  6 处调用点已全部显式 `encoding="utf-8", errors="replace"`，并新增
+  `check_subprocess_encoding.py` 静态门禁（此前所有测试文件名都是 ASCII，所以一直没暴露）
 - 🔧 修复：`build_components.py` 在中文控制台打印对勾导致构建成功却报失败；设置页 RESTful
   端口上限低于固定值 64001，保存一次即写坏配置；`save_config` 不清缓存导致改目录需重启
 - 🔧 修复：粘贴**带超链接的标题**（B 站视频页标题、网页列表项这类 `<a href="URL">标题</a>`）

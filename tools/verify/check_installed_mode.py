@@ -41,7 +41,8 @@ import re  # noqa: E402
 
 try:
     r = subprocess.run([status["path"], "-hide_banner", "-encoders"],
-                       capture_output=True, text=True, timeout=20)
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=20)
     print("直接探测: rc=", r.returncode, "stdout长度=", len(r.stdout or ""),
           "stderr=", (r.stderr or "")[:200])
 except Exception as e:
@@ -51,7 +52,8 @@ except Exception as e:
 for opt in ("-encoders", "-muxers", "-filters"):
     try:
         rr = subprocess.run([status["path"], "-hide_banner", opt], capture_output=True,
-                            text=True, timeout=20, creationflags=F._NO_WINDOW)
+                            text=True, encoding="utf-8", errors="replace",
+                            timeout=20, creationflags=F._NO_WINDOW)
         lines = (rr.stdout or "").splitlines()
         hit = [ln for ln in lines
                if len(ln.split()) >= 2 and re.fullmatch(r"[A-Z.]{1,6}", ln.split()[0])]

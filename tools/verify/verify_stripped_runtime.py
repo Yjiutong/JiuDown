@@ -69,7 +69,9 @@ print('MainWindow OK')
     print("用剥离后的运行时启动应用…")
     proc = subprocess.run(
         [str(py), "-c", code],
-        capture_output=True, text=True, timeout=180, cwd=str(BASE), env=env,
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        timeout=180, cwd=str(BASE), env=env,
     )
     out = (proc.stdout or "").strip().splitlines()
     err = (proc.stderr or "").strip()

@@ -516,6 +516,8 @@ def _probe_version(path: str) -> str:
             [path, "-version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             creationflags=_NO_WINDOW,
         )
@@ -550,6 +552,10 @@ def _probe_capabilities(path: str) -> frozenset:
                 [path, "-hide_banner", opt],
                 capture_output=True,
                 text=True,
+                # ffmpeg/pip 的输出可能带中文路径，按 locale 解 UTF-8 会抛
+                # UnicodeDecodeError，统一显式解码
+                encoding="utf-8",
+                errors="replace",
                 timeout=20,
                 creationflags=_NO_WINDOW,
             )

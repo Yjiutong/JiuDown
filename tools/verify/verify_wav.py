@@ -111,11 +111,30 @@ if src_video_only is not None:
 else:
     print("SKIP 无音轨导出音频（缺少纯视频素材）")
 
+# 7b) 中文文件名必须同样给出可读错误
+# 这一条是本脚本里唯一带中文的断言，专门盯住"ffmpeg 输出按 locale(cp936) 解码"的回归：
+# 不显式指定 encoding 时解码线程会死掉、stderr 变成 None，错误信息会退化成"未知错误"，
+# 而上面 7) 用 ASCII 文件名永远测不到这一层。
+cjk_bad = tmp / "如何设定字号比例·排版 #平面设计.mp4"
+cjk_bad.write_bytes(b"not a video at all")
+try:
+    engine._ffmpeg_convert(cjk_bad, tmp / "如何设定字号比例.mp3", "mp3", "双声道")
+    check("中文文件名失败时也给出可读错误", False, "未抛错")
+except engine.EngineError as e:
+    msg = str(e)
+    check("中文文件名失败时也给出可读错误",
+          "未知错误" not in msg and len(msg) > len("mp3 转换失败：") + 8, msg[:90])
+    check("中文文件名时 stderr 未被解码吞掉",
+          "Invalid data" in msg or "Error opening" in msg, msg[-60:])
+finally:
+    cjk_bad.unlink(missing_ok=True)
+
 # 8) 声道数确实生效：单声道 mp3 的音频流应标记为 mono
 mono_mp3 = tmp / "mono.mp3"
 engine._ffmpeg_convert(src_av, mono_mp3, "mp3", "单声道")
 probe = subprocess.run(
     [FFMPEG, "-i", str(mono_mp3)], capture_output=True, text=True,
+    encoding="utf-8", errors="replace",
     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
 ).stderr
 audio_line = next((ln.strip() for ln in probe.splitlines() if "Audio:" in ln), "")
