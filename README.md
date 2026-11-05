@@ -554,7 +554,7 @@ python -m pdb main.py
   中文标题的产物路径 → 解码线程抛 `UnicodeDecodeError`，**但 `subprocess.run` 不把这个异常
   抛给调用方**，只是把 `stderr` 变成 `None`。结果是 ffmpeg 真失败时错误信息退化成
   "mp3 转换失败：未知错误"，`does not contain any stream` 这类按内容的特判也永远命中不了。
-  6 处调用点已全部显式 `encoding="utf-8", errors="replace"`，并新增
+  全仓 15 处文本模式子进程调用中，14 处原本漏了这两个参数（应用侧 8 处：转码、pip 更新、B 站合并两个分支、ffmpeg 版本与能力探测、runtime 自检；测试脚本 6 处），已全部显式 `encoding="utf-8", errors="replace"`，并新增
   `check_subprocess_encoding.py` 静态门禁（此前所有测试文件名都是 ASCII，所以一直没暴露）
 - 🔧 修复：`build_components.py` 在中文控制台打印对勾导致构建成功却报失败；设置页 RESTful
   端口上限低于固定值 64001，保存一次即写坏配置；`save_config` 不清缓存导致改目录需重启
