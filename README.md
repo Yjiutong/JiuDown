@@ -214,7 +214,7 @@ innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tool
 | `verify_release.py` | 包内不混开发期文件、FFmpeg 不依赖 MinGW 运行库、快捷方式指向与工作目录 |
 | `verify_components.py` / `verify_stripped_runtime.py` | 组件包与 manifest 一致、剥离后的 runtime 仍能起窗口 |
 | `verify_runtime.py` / `check_release_zip.py` | 安装脚本不删仓库内组件包、Release 资产 zip 可读 |
-| `verify_engine.py` / `verify_ytdlp.py` / `verify_wav.py` | 双后端路由与降级、进度回调、纯音频只取音频流 |
+| `verify_engine.py` / `verify_ytdlp.py` / `verify_wav.py` | 多后端路由与降级、下载进度回调、纯音频只取音频流、ffmpeg 合并/转码的百分比爬升与超时中止 |
 | `verify_ffmpeg.py` / `verify_gating.py` | FFmpeg 能力探测与 UI 门控（含系统 PATH 侦测） |
 | `verify_url_input.py` | 粘贴链接的健壮性（零宽字符/BOM/标题前缀/分享尾巴）与出错必须可见 |
 | `verify_douyin_note.py` | 抖音图文：形态识别与路由顺序、无水印原图挑选与逐张候选重试、多图落盘、卡片张数呈现 |
@@ -532,6 +532,15 @@ python -m pdb main.py
   （Googlebot UA，冷启动一次请求、完全不依赖 Cookie）——实测两条路径张数与分辨率一致
   （55/55、262/262，均 1080x1442），任一条被改版打掉都不至于全瞎。`download_url_list`
   是叠了作者水印的另一套地址，始终排在最后才用
+- ✅ **合并/转码阶段回传真实进度**：之前 `合并中` 状态只有徽章和停在 99 的进度条，长视频
+  转 mp3/wav、B 站 DASH 合并时看不出程序还在干活。现在读 ffmpeg 的 `-progress pipe:1`
+  机器可读输出换算成百分比显示在卡片详情里（如 `正在转换音频为 mp3… 46%`），顺带把
+  ffmpeg 的超时从"名义上有"改成真的能掐断——原来的超时判断写在读取循环之后，得等进程
+  自己结束才检查，等于没有超时。**时长未知时不显示任何数字**，宁可只写"正在合并音视频…"
+  也不编一个进度出来
+- 🔧 已知边界：yt-dlp 自己内部完成的 DASH 合并（普通 mp4 下载）拿不到百分比，那一类
+  仍只显示"正在合并音视频…"；本条覆盖的是我们自己调用 ffmpeg 的全部路径（B 站合并、
+  mp3/wav 转码、flv 重封装）
 - ✅ **挡住风控占位图**：批量取图时抖音会成批返回 0 字节，或拿一张约 10KB 的 GIF 顶替所请求
   的 jpeg/webp，两者都是 HTTP 200——按 URL 命名就会产出打不开的"图片"。现在按魔数校验内容
   格式，不符就换候选、候选跑完再退避重跑一轮，落盘扩展名也跟着真实字节定

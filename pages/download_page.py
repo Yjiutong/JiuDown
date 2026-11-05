@@ -694,6 +694,12 @@ class TaskCard(QFrame):
             )
             if speed:
                 detail += f" | {download_manager.format_speed(speed)}"
+            if status == "merging":
+                # 进度条的含义是「字节完成度」，合并阶段它本就停在 99；真实耗时靠这句
+                # 话表明。没拿到百分比就只留文案，不显示猜出来的数字。
+                percent = float(task.get("merge_percent") or 0)
+                phase = (task.get("message") or "正在处理…").strip()
+                detail = f"{phase} {percent:.0f}% · {detail}" if percent > 0 else f"{phase} · {detail}"
             self.detail_label.setText(f"{meta} · {detail}" if meta else detail)
             self.detail_label.setProperty("cssClass", "taskDetail")
         elif status == "completed":

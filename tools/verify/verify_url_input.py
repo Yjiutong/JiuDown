@@ -177,6 +177,48 @@ menu2 = QMenu()
 items2 = [a.text() for a in card._build_quality_menu(menu2).menu().actions()]
 ck("无一可用时退回全量而非空菜单", items2 == ["1080P 高码率"], str(items2))
 
+# 合并/转码进度这条通路：hook → 任务字段 → 卡片文案，三段都要真的接上
+import re as _re
+
+from download_manager import download_manager as _dm
+from pages.download_page import TaskCard
+
+_tid = "merge-progress-case"
+_dm.tasks[_tid] = {
+    "id": _tid, "url": URL, "status": "downloading", "format": "mp3", "quality": "720P",
+    "quality_level": None, "levels": [], "kind": "", "image_count": 0, "title": "测试",
+    "uploader": "", "extractor": "", "duration": 0, "thumbnail": "", "playlist_count": 0,
+    "progress": 99.0, "progress_callback": None, "speed": 0, "downloaded_size": 1048576,
+    "total_size": 1048576, "error": "", "message": "", "output_path": "",
+    "merge_percent": 0, "_files_done": 1, "_files_total": 1, "_phase": "",
+}
+_hook = _dm._postprocessor_hook(_tid)
+_hook({"status": "started"})
+ck("started 切到合并态并清零百分比",
+   _dm.tasks[_tid]["status"] == "merging" and _dm.tasks[_tid]["merge_percent"] == 0)
+ck("started 按目标格式定好文案", "mp3" in (_dm.tasks[_tid]["message"] or ""),
+   _dm.tasks[_tid]["message"])
+_hook({"status": "processing", "percent": 37.5})
+ck("processing 写入引擎回报的百分比", _dm.tasks[_tid]["merge_percent"] == 37.5,
+   str(_dm.tasks[_tid]["merge_percent"]))
+_hook({"status": "processing"})
+ck("没有 percent 的事件不改数字", _dm.tasks[_tid]["merge_percent"] == 37.5)
+_hook({"status": "processing", "percent": "坏值"})
+ck("坏百分比值被忽略而不是写进任务", _dm.tasks[_tid]["merge_percent"] == 37.5,
+   str(_dm.tasks[_tid]["merge_percent"]))
+
+mcard = TaskCard(_tid)
+mcard.update_task(dict(_dm.tasks[_tid]))
+_text = mcard.detail_label.text()
+# 卡片按 {:.0f} 取整显示，37.5 会成 38%，所以这里只断言"有百分比数字"而不是字面值
+ck("卡片显示合并文案与百分比",
+   "正在转换音频" in _text and _re.search(r"\d+%", _text) is not None, _text[:80])
+mcard.update_task(dict(_dm.tasks[_tid], merge_percent=0))
+_text0 = mcard.detail_label.text()
+ck("拿不到百分比时不显示编出来的数字",
+   _re.search(r"\d+%", _text0) is None, _text0[:70])
+_dm.tasks.pop(_tid, None)
+
 print(f"\n===== {len(PASS)} passed, {len(FAIL)} failed =====")
 print("RESULT:", "PASS" if not FAIL else f"FAIL {FAIL}")
 sys.exit(1 if FAIL else 0)

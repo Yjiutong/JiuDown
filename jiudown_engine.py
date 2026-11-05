@@ -591,13 +591,17 @@ class NativeBilibiliBackend:
             if postprocessor_hook:
                 postprocessor_hook({"status": "started"})
 
+            emit = ytdlp_engine.progress_emitter(postprocessor_hook)
+            seconds = float(info.get("duration") or 0.0)
             if audio_only:
                 target = out_path / f"{stem}.{file_format}"
-                ytdlp_engine._ffmpeg_convert(audio_file, target, file_format, channels)
+                ytdlp_engine._ffmpeg_convert(audio_file, target, file_format, channels,
+                                             duration=seconds, on_progress=emit)
                 audio_file.unlink(missing_ok=True)
             else:
                 target = out_path / f"{stem}.{file_format}"
-                self._merge(video_file, audio_file if streams.get("audio_url") else None, target, file_format)
+                self._merge(video_file, audio_file if streams.get("audio_url") else None,
+                            target, file_format, duration=seconds, on_progress=emit)
                 video_file.unlink(missing_ok=True)
                 audio_file.unlink(missing_ok=True)
 
@@ -619,10 +623,16 @@ class NativeBilibiliBackend:
         }
 
     @staticmethod
-    def _merge(video: Path, audio: Optional[Path], target: Path, file_format: str) -> None:
+    def _merge(
+        video: Path,
+        audio: Optional[Path],
+        target: Path,
+        file_format: str,
+        *,
+        duration: float = 0.0,
+        on_progress: Optional[Callable[[float], None]] = None,
+    ) -> None:
         """音视频合并（-c copy 不重编码）；flv 由通用转换函数重封装"""
-        import subprocess  # noqa: PLC0415
-
         exe = ytdlp_engine._ffmpeg_exe()
         if file_format == "flv":
             # 先合成 mp4 再重封装，避免 ffmpeg 直接 mux 到 flv 的兼容问题
@@ -631,14 +641,12 @@ class NativeBilibiliBackend:
             if audio and audio.exists():
                 cmd += ["-i", str(audio)]
             cmd += ["-c", "copy", str(inter)]
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=3600,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if proc.returncode != 0 or not inter.exists():
-                raise EngineError(f"音视频合并失败：{(proc.stderr or '').strip()[-200:]}")
-            ytdlp_engine._ffmpeg_convert(inter, target, "flv", "双声道")
+            code, stderr = ytdlp_engine._run_ffmpeg(cmd)
+            if code != 0 or not inter.exists():
+                raise EngineError(f"音视频合并失败：{(stderr or '').strip()[-200:]}")
+            # 进度挂在真正耗时的那一步（重封装）；前一步是 copy，瞬间完成
+            ytdlp_engine._ffmpeg_convert(inter, target, "flv", "双声道",
+                                         duration=duration, on_progress=on_progress)
             inter.unlink(missing_ok=True)
             return
 
@@ -646,13 +654,10 @@ class NativeBilibiliBackend:
         if audio and audio.exists():
             cmd += ["-i", str(audio)]
         cmd += ["-c", "copy", str(target)]
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=3600,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if proc.returncode != 0 or not target.exists():
-            raise EngineError(f"音视频合并失败：{(proc.stderr or '').strip()[-200:]}")
+        code, stderr = ytdlp_engine._run_ffmpeg(cmd, duration=duration,
+                                                on_progress=on_progress)
+        if code != 0 or not target.exists():
+            raise EngineError(f"音视频合并失败：{(stderr or '').strip()[-200:]}")
 
 
 # =====================================================================

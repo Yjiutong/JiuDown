@@ -10,6 +10,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -139,6 +140,68 @@ probe = subprocess.run(
 ).stderr
 audio_line = next((ln.strip() for ln in probe.splitlines() if "Audio:" in ln), "")
 check("单声道输出音频流为 mono", "mono" in audio_line.lower(), audio_line[:80])
+
+# 8b) 合并/转码阶段回传真实进度（数据来自 ffmpeg 的 -progress pipe:1）
+# 素材要足够长才会切出多个进度事件；用 bytes 重复而不是逐样本算正弦，否则合成
+# 本身就要跑几十秒，测试会被自己的夹具拖死。
+long_wav = tmp / "progress_src.wav"
+with wave.open(str(long_wav), "wb") as w:
+    w.setnchannels(2)
+    w.setsampwidth(2)
+    w.setframerate(44100)
+    w.writeframes(b"\x00\x01" * (44100 * 120 * 2 * 2 // 2))
+
+seen = []
+engine._ffmpeg_convert(long_wav, tmp / "progress.mp3", "mp3", "双声道",
+                       duration=120.0, on_progress=seen.append)
+check("转码回传了进度事件", len(seen) >= 2, "事件=%s" % [round(x, 1) for x in seen])
+check("进度单调不回退", all(b >= a for a, b in zip(seen, seen[1:])),
+      str([round(x, 1) for x in seen[:4]]))
+check("进度收口在 100", bool(seen) and abs(seen[-1] - 100.0) < 0.01, str(seen[-1:]))
+check("进度全部落在 0~100", all(0.0 <= x <= 100.0 for x in seen), str(seen[:3]))
+
+blind = []
+engine._ffmpeg_convert(long_wav, tmp / "blind.mp3", "mp3", "双声道",
+                       duration=0.0, on_progress=blind.append)
+check("时长未知时不编造百分比", blind == [], str(blind[:3]))
+
+check("解析 out_time_us", engine._out_time_seconds("4000000") == 4.0)
+check("解析 out_time 文本", engine._out_time_seconds("00:05:00.000000") == 300.0)
+check("解析坏值返回 None", engine._out_time_seconds("N/A") is None)
+
+# -re 让 ffmpeg 按实际时长读，必定超不过 1 秒的预算 → 验证卡住的进程会被掐掉，
+# 而不是永久占住下载线程（DownKyi 的 WaitForExit 就没有这一步）
+clock = time.monotonic()
+try:
+    engine._run_ffmpeg([FFMPEG, "-y", "-re", "-i", str(long_wav), "-vn",
+                        "-c:a", "libmp3lame", str(tmp / "never.mp3")],
+                       duration=120.0, timeout=1)
+    check("超时会被中止", False, "没抛错")
+except engine.EngineError as e:
+    check("超时会被中止", "超时" in str(e), str(e)[:40])
+spent = time.monotonic() - clock
+check("中止不会把调用挂住", spent < 30.0, "耗时 %.1fs" % spent)
+
+# stderr 由独立线程抽干：不抽就会在 pipe 缓冲写满后僵死
+code, err_text = engine._run_ffmpeg([FFMPEG, "-y", "-i", str(long_wav), "-vn",
+                                     "-c:a", "libmp3lame", "-b:a", "320k",
+                                     str(tmp / "drain.mp3")], duration=120.0)
+check("失败与成功都能拿到 stderr 文本", code == 0 and "size=" in err_text,
+      repr(err_text.strip()[-50:]))
+
+# 上面的转码太快（200x+），只会切出收尾那一两个事件；-re 强制 ffmpeg 按实际时长
+# 读，才能把"百分比一路爬升"这条路真正跑出来
+short = tmp / "short.wav"
+make_wav(short, seconds=6.0)
+climb = []
+engine._run_ffmpeg([FFMPEG, "-y", "-re", "-i", str(short), "-vn", "-c:a", "libmp3lame",
+                    str(tmp / "climb.mp3")], duration=6.0, on_progress=climb.append)
+check("进度是一路爬升而非只有收尾", len(climb) >= 3,
+      "%d 个事件 %s" % (len(climb), [round(x) for x in climb[:6]]))
+check("爬升中出现过 5~95 之间的中间值", any(5.0 <= x <= 95.0 for x in climb),
+      str([round(x, 1) for x in climb]))
+check("爬升仍然单调不回退", all(b >= a for a, b in zip(climb, climb[1:])),
+      str([round(x, 1) for x in climb]))
 
 # 9) 画质 → 格式选择器
 check("720P 选择器带上限", "height<=720" in engine.format_selector("720P", "mp4"))

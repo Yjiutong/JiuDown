@@ -138,6 +138,7 @@ class DownloadManager:
                 "thumbnail": "",
                 "playlist_count": 0,
                 "output_path": "",
+                "merge_percent": 0,
                 # 内部字段（进度聚合用，不外露给 UI）
                 "_files_done": 0,
                 "_files_total": 1,
@@ -167,6 +168,7 @@ class DownloadManager:
                 "error": "",
                 "message": "等待重新下载…",
                 "output_path": "",
+                "merge_percent": 0,
                 "_files_done": 0,
                 "_files_total": 1,
                 "_phase": "",
@@ -315,15 +317,30 @@ class DownloadManager:
         self._notify(task)
 
     def _postprocessor_hook(self, task_id: str):
-        """后处理（合并/转码）回调"""
+        """后处理（合并/转码）回调
+
+        started 定文案，processing 只更新引擎回报的百分比（来自 ffmpeg -progress）。
+        没有百分比时保持空着，界面上就不显示数字——不拿猜测值冒充进度。
+        """
 
         def hook(d: dict) -> None:
             task = self.tasks.get(task_id)
             if task is None:
                 return
             status = d.get("status")
+            if status == "processing" and task.get("status") == "merging":
+                percent = d.get("percent")
+                if percent is None:
+                    return
+                try:
+                    task["merge_percent"] = max(0.0, min(float(percent), 100.0))
+                except (TypeError, ValueError):
+                    return
+                self._notify(task)
+                return
             if status in ("started", "processing"):
                 task["status"] = "merging"
+                task["merge_percent"] = 0
                 file_format = task.get("format") or "mp4"
                 if file_format in engine.AUDIO_FORMATS:
                     task["message"] = f"正在转换音频为 {file_format}…"
@@ -361,6 +378,7 @@ class DownloadManager:
             "total_size": 0,
             "error": "",
             "message": "正在解析链接…",
+            "merge_percent": 0,
             "_files_done": 0,
             "_files_total": 1,
             "_phase": "",

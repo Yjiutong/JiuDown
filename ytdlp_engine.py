@@ -559,11 +559,124 @@ def _ffmpeg_exe() -> str:
     return "ffmpeg"
 
 
+def _out_time_seconds(value: str) -> Optional[float]:
+    """解析 -progress 的 time 字段
+
+    out_time_us 与 out_time_ms 单位都是微秒（ffmpeg 的历史遗留错误，两者同值），
+    out_time 是 HH:MM:SS.ffffff。三种都认，免得换个构建就取不到进度。
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value) / 1_000_000.0
+    match = re.fullmatch(r"(\d+):(\d\d):(\d\d)(?:\.(\d+))?", value)
+    if match:
+        h, m, s, frac = match.groups()
+        return int(h) * 3600 + int(m) * 60 + int(s) + (int(frac) / 10 ** len(frac) if frac else 0.0)
+    return None
+
+
+def _run_ffmpeg(
+    cmd: list[str],
+    *,
+    duration: float = 0.0,
+    on_progress: Optional[Callable[[float], None]] = None,
+    timeout: int = 3600,
+) -> tuple[int, str]:
+    """运行 ffmpeg，并把 -progress 的输出换算成 0~100 的百分比回报
+
+    stdout（-progress 的 key=value）与 stderr（ffmpeg 的正常日志）**都必须另起线程
+    抽干**：任一个 pipe 写满，ffmpeg 就会卡在写上、整个调用永久阻塞。所以读放线程，
+    主线程只负责 proc.wait(timeout) —— 把超时判断写在读取循环之后是无效的，那样
+    得等进程自己结束才会检查，等于没有超时。
+
+    duration 未知（<=0）时**不报任何百分比**——宁可只显示"处理中"，也不编一个数字
+    出来。返回 (returncode, stderr 文本)。
+    """
+    # -progress 是全局选项，放在最前面才不会落到某个输入的私有参数区
+    full = [cmd[0], "-nostdin", "-progress", "pipe:1", *cmd[1:]]
+    proc = subprocess.Popen(
+        full,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    collected: list[str] = []
+    state = {"last": 0.0}
+
+    def _pump_progress() -> None:
+        for line in (proc.stdout or []):
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if key not in ("out_time_us", "out_time_ms", "out_time"):
+                continue
+            seconds = _out_time_seconds(value)
+            if seconds is None or duration <= 0 or on_progress is None:
+                continue
+            percent = min(max(seconds / duration * 100.0, 0.0), 99.0)
+            if percent - state["last"] >= 0.5 or (percent >= 99.0 and state["last"] < 99.0):
+                state["last"] = percent
+                on_progress(percent)
+        if proc.stdout:
+            proc.stdout.close()
+
+    def _pump_stderr() -> None:
+        try:
+            collected.append(proc.stderr.read() if proc.stderr else "")
+        except Exception:
+            pass
+        finally:
+            if proc.stderr:
+                proc.stderr.close()
+
+    readers = [threading.Thread(target=_pump_progress, daemon=True),
+               threading.Thread(target=_pump_stderr, daemon=True)]
+    for th in readers:
+        th.start()
+
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            pass
+        for th in readers:
+            th.join(timeout=5)
+        raise EngineError("ffmpeg 处理超时，已中止")
+    for th in readers:
+        th.join(timeout=10)
+
+    stderr_text = "".join(collected)
+    if on_progress is not None and duration > 0 and code == 0:
+        on_progress(100.0)
+    return code, stderr_text
+
+
+def progress_emitter(hook: Optional[Callable[[dict], None]]) -> Optional[Callable[[float], None]]:
+    """把 ffmpeg 的百分比接成 postprocessor_hook 的 processing 事件"""
+    if hook is None:
+        return None
+
+    def emit(percent: float) -> None:
+        hook({"status": "processing", "percent": round(float(percent), 1)})
+
+    return emit
+
+
 def _ffmpeg_convert(
     source: Path,
     target: Path,
     file_format: str,
     channels: str = "双声道",
+    *,
+    duration: float = 0.0,
+    on_progress: Optional[Callable[[float], None]] = None,
 ) -> Path:
     """用应用自带的 ffmpeg 转封装/转码
 
@@ -581,20 +694,8 @@ def _ffmpeg_convert(
         # flv：仅重封装，不重编码
         cmd = [exe, "-y", "-i", str(source), "-c", "copy", str(target)]
 
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        # ffmpeg 的 stderr 会原样回显输入文件路径，而产物路径几乎必带中文标题；
-        # 不指定 encoding 时 Python 按 locale(cp936) 解 UTF-8 字节，会抛
-        # UnicodeDecodeError，把"已经下好的任务"报成下载失败
-        encoding="utf-8",
-        errors="replace",
-        timeout=60 * 60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if proc.returncode != 0 or not target.exists():
-        stderr = proc.stderr or ""
+    code, stderr = _run_ffmpeg(cmd, duration=duration, on_progress=on_progress)
+    if code != 0 or not target.exists():
         if "does not contain any stream" in stderr:
             raise EngineError("该视频没有音频轨，无法导出 mp3/wav")
         tail = stderr.strip().splitlines()[-1:]
@@ -602,7 +703,8 @@ def _ffmpeg_convert(
         if file_format in AUDIO_FORMATS and channels == "单声道":
             # 精简版 ffmpeg 缺少音频重采样时单声道会失败：降级双声道再试一次
             logger.warning(f"单声道转换失败，降级双声道重试: {reason}")
-            return _ffmpeg_convert(source, target, file_format, "双声道")
+            return _ffmpeg_convert(source, target, file_format, "双声道",
+                                   duration=duration, on_progress=on_progress)
         raise EngineError(f"{file_format} 转换失败：{reason}")
     return target
 
@@ -808,7 +910,9 @@ def download(
         target = final.with_suffix(f".{file_format}")
         if target.name != final.name:
             logger.info(f"[引擎] 转换输出: {final.name} -> {target.name}")
-            _ffmpeg_convert(final, target, file_format, channels)
+            _ffmpeg_convert(final, target, file_format, channels,
+                            duration=float((info or {}).get("duration") or 0.0),
+                            on_progress=progress_emitter(postprocessor_hook))
             try:
                 final.unlink(missing_ok=True)
             except Exception:
