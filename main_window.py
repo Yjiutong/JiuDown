@@ -520,6 +520,7 @@ class MainWindow(QMainWindow):
         self._toggle_btn.setFixedSize(40, 40)
         self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._toggle_btn.setToolTip("切换侧边栏")
+        self._toggle_btn.clicked.connect(self._toggle_sidebar)
         # 左对齐：图标中心落在 x=32，与导航项图标列对齐（Codex 风格）
         side_layout.addWidget(self._toggle_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
