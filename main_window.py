@@ -28,7 +28,7 @@ import jiudown_engine
 import theme
 from download_manager import download_manager
 from ui_widgets import (
-    Backdrop, install_combo_arrows, set_styled,
+        Backdrop, install_combo_arrows, install_label_fit, set_styled,
 )
 from pages.download_page import DownloadPage
 from pages.settings_page import SettingsPage
@@ -610,6 +610,7 @@ class MainWindow(QMainWindow):
         for combo in self.findChildren(QComboBox):
             combo.view().setFrameShape(QFrame.Shape.NoFrame)
         install_combo_arrows(QApplication.instance())
+        install_label_fit(QApplication.instance())
 
         # 标题栏左段初始与侧边栏同宽（后续由 sidebar Resize 事件逐帧同步）
         self._title_bar.set_left_width(SIDEBAR_WIDE)

@@ -27,7 +27,7 @@ import jiudown_engine
 from config_manager import config_manager
 from download_manager import download_manager, download_log_manager
 from ui_widgets import (
-    ActionButton, attach_panel, attach_record, field, field_join,
+    ActionButton, attach_panel, attach_record, auto_label, field, field_join,
     flag, hug, inline, number_tag, set_styled, state_box, title_pair,
 )
 from pages.preview_panel import PreviewPanel
@@ -941,22 +941,20 @@ class DownloadPage(QWidget):
         # ---- 任务列表（随滚动区滚动） ----
         self.empty_state = QFrame()
         self.empty_state.setObjectName("emptyState")
-        self.empty_state.setMinimumHeight(216)
         self.empty_state.setProperty("cssClass", "plain")
         empty_lay = QVBoxLayout(self.empty_state)
         empty_lay.setContentsMargins(32, 40, 32, 40)
         empty_lay.setSpacing(12)
-        empty_title = QLabel("暂无下载任务")
-        empty_title.setProperty("cssClass", "emptyTitle")
-        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_hint = QLabel(
-            "粘贴视频或抖音图文链接后回车生成链接卡片，卡片会自动解析标题与该链接实际可下的档位；"
-            "点击“开始下载”加入队列，悬停卡片可预览低清画面"
+        empty_title = auto_label(
+            "暂无下载任务", "emptyTitle",
+            align=Qt.AlignmentFlag.AlignCenter,
         )
-        empty_hint.setProperty("cssClass", "emptyHint")
-        empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_hint.setWordWrap(True)
-        empty_hint.setMaximumWidth(560)
+        empty_hint = auto_label(
+            "粘贴视频或抖音图文链接后回车生成链接卡片，卡片会自动解析标题与该链接实际可下的档位；"
+            "点击“开始下载”加入队列，悬停卡片可预览低清画面",
+            "emptyHint", max_width=560,
+            align=Qt.AlignmentFlag.AlignCenter,
+        )
         empty_lay.addWidget(empty_title)
         empty_lay.addWidget(empty_hint, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.empty_state)

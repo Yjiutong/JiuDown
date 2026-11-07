@@ -65,6 +65,68 @@ def hug(label: QLabel, text: str = None) -> QLabel:
 
 
 # =====================================================================
+# 自适应文字容器（硬性规则：每个标签都有独立、完整、不被压缩的容器）
+#
+# QLabel 在 QVBoxLayout 里被压缩时，默认 sizeHint 只报一行高度，父布局
+# 会把「多出来的换行」裁掉。AutoLabel 用 heightForWidth 精确计算按当前
+# 宽度换行后的真实高度，并把它同时作为 sizeHint / minimumSizeHint，
+# 纵向策略设为 Fixed（不可压缩），宽度变化立即 updateGeometry 重算。
+# =====================================================================
+
+
+class AutoLabel(QLabel):
+    """按内容自适应高度的文字标签：保证整段文字完整可见，不会被裁切"""
+
+    def __init__(self, text: str = "", parent=None, max_width: int = 0):
+        super().__init__(text, parent)
+        self._max_width = max_width
+        self.setWordWrap(True)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        if max_width > 0:
+            self.setMaximumWidth(max_width)
+
+    def _content_height(self, width: int) -> int:
+        if width <= 0:
+            width = max(self.width(), 1)
+        height = self.heightForWidth(width)
+        if height <= 0:
+            height = super().sizeHint().height()
+        return max(height, self.fontMetrics().height())
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(super().minimumSizeHint().width(),
+                     self._content_height(self.width()))
+
+    def sizeHint(self) -> QSize:
+        return QSize(super().sizeHint().width(),
+                     self._content_height(self.width()))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # 宽度变化会改变换行数：立刻把新高度报给父布局，避免沿用旧值裁字
+        if event.oldSize().width() != event.size().width():
+            self.updateGeometry()
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.updateGeometry()
+
+
+def auto_label(text: str, css_class: str = "", max_width: int = 0,
+               align=None, parent=None) -> AutoLabel:
+    """建一个自适应文字标签；css_class 只管配色，高度永远由内容决定"""
+    label = AutoLabel(text, parent, max_width=max_width)
+    if css_class:
+        label.setProperty("cssClass", css_class)
+    label.setAlignment(
+        align or (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    )
+    return label
+
+
+# =====================================================================
 # 文字部件
 # =====================================================================
 
@@ -333,6 +395,58 @@ class _ComboArrow(QWidget):
             QPointF(self.WIDTH, 0),
             QPointF(self.WIDTH / 2, self.HEIGHT),
         ]))
+
+
+# =====================================================================
+# 硬性规则：所有 QLabel 的文字都必须有独立、自适应、完整的容器
+#
+# 事件过滤器在 Show / Resize / 内容变化时，把换行标签的最小高度强制设为
+# 「按当前宽度完整排版所需高度」(heightForWidth)，使任何父布局都无法把
+# 文字压到换行高度以下。AutoLabel 之外遗留的裸 QLabel 也一并受保护。
+# =====================================================================
+
+
+class _LabelFitFilter(QObject):
+    """全局保证多行 QLabel 不被压缩裁切"""
+
+    def _fit(self, label) -> None:
+        if not isinstance(label, QLabel) or not label.wordWrap():
+            return
+        if not label.text().strip():
+            if label.minimumHeight() != 0:
+                label.setMinimumHeight(0)
+            return
+        width = label.width()
+        if width <= 0:
+            return
+        needed = label.heightForWidth(width)
+        if needed <= 0:
+            needed = label.fontMetrics().height()
+        if label.minimumHeight() != needed:
+            label.setMinimumHeight(needed)
+        # 纵向策略不可压缩：父布局分配的空间只能 >= 文字完整高度
+        label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+
+    def eventFilter(self, obj, event) -> bool:
+        kind = event.type()
+        if kind in (QEvent.Type.Show, QEvent.Type.Resize,
+                    QEvent.Type.Polish, QEvent.Type.FontChange):
+            self._fit(obj)
+        return False
+
+
+_LABEL_FIT_FILTER: _LabelFitFilter | None = None
+
+
+def install_label_fit(app) -> None:
+    """安装全局文字容器保护（幂等）"""
+    global _LABEL_FIT_FILTER
+    if _LABEL_FIT_FILTER is not None:
+        return
+    _LABEL_FIT_FILTER = _LabelFitFilter(app)
+    app.installEventFilter(_LABEL_FIT_FILTER)
 
 
 _COMBO_FILTER: _ComboInstallFilter | None = None
