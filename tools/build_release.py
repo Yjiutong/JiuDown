@@ -460,7 +460,7 @@ def write_release_notes(version: str, artifacts: list[Path]) -> Path:
 - 左侧导航支持展开/收起，两态共用固定行高与图标位置
 - 空状态直接落在纯白底上，文字不再被背景遮挡
 - 标题栏、窗口与托盘继续使用 `resources/app.ico`
-- 随仓库分发界面字体与 OFL 许可证；源码、便携包与安装包均带齐字体
+- 界面字体跟随系统默认，不再随包携带字体文件
 
 ## 发布资产
 

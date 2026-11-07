@@ -111,8 +111,6 @@ REQUIRED = (
     "JiuDown/启动.vbs",
     "JiuDown/pages/home_page.py",
     "JiuDown/resources/app.ico",
-    "JiuDown/resources/fonts/Saira.ttf",
-    "JiuDown/resources/fonts/Saira-OFL.txt",
     "JiuDown/resources/ffmpeg.exe",
     "JiuDown/runtime/python/python.exe",
     "JiuDown/runtime/python/pythonw.exe",

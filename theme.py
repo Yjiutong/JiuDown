@@ -19,10 +19,9 @@ APP_VERSION = "1.3.0"
 # 窗口保持直角
 WINDOW_RADIUS = 0
 
-# 字体栈：Saira 负责拉丁与数字（随包携带，见 install_fonts），中文落系统黑体
 FONT_FAMILY = (
-    '"Saira", "Segoe UI Variable Text", "Segoe UI", '
-    '"Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif'
+    '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", '
+    '"PingFang SC", system-ui, sans-serif'
 )
 MONO_FAMILY = '"Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace'
 
@@ -738,52 +737,16 @@ def is_dark() -> bool:
 
 
 # =====================================================================
-# 字体：Saira（几何拉丁 + 数字）随包携带，中文落系统黑体
-# =====================================================================
-
-_FONT_ADDED = False
-
-
-def install_fonts() -> None:
-    """注册随包携带的 Saira 可变字体，只注册一次"""
-    global _FONT_ADDED
-    if _FONT_ADDED:
-        return
-    _FONT_ADDED = True
-    try:
-        import sys
-        from pathlib import Path
-
-        from system_info import system_info
-
-        candidates = [
-            system_info.get_app_root() / "resources" / "fonts" / "Saira.ttf",
-            Path(__file__).resolve().parent / "resources" / "fonts" / "Saira.ttf",
-            # PyInstaller 单文件：数据解到 sys._MEIPASS
-            Path(getattr(sys, "_MEIPASS", ".")) / "resources" / "fonts" / "Saira.ttf",
-        ]
-        for path in candidates:
-            if path.exists() and QFontDatabase.addApplicationFont(str(path)) >= 0:
-                break
-    except Exception:
-        pass
-
-
+# 字体：跟随系统默认（不随包携带任何字体文件），中文落系统中文字体
 def apply_app_font(app: QApplication) -> None:
-    """应用字体：Saira 在前、中文黑体兜底"""
-    install_fonts()
-    font = QFont()
-    font.setFamilies(["Saira", "Segoe UI Variable Text", "Segoe UI",
-                      "Microsoft YaHei UI", "PingFang SC", "sans-serif"])
+    """应用字体：跟随系统默认，仅统一字号与抗锯齿策略"""
+    font = QApplication.font()
     font.setPointSizeF(9.5)
     try:
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     except Exception:
         pass
     app.setFont(font)
-
-
-# =====================================================================
 # 主题模式：当前仅提供纯白模式；保留旧常量兼容既有调用点
 # =====================================================================
 

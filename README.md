@@ -258,7 +258,6 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 ├── 首次安装.bat               # 首次安装：拉取离线运行时
 ├── requirements.txt
 ├── resources/app.ico          # 入库的二进制资源（图标）
-├── resources/fonts/           # 界面字体 + OFL 许可证
 └── config/ Download/ TEMP/ logs/ runtime/   # 运行时生成，已 gitignore
 ```
 
@@ -522,8 +521,7 @@ python -m pdb main.py
 - ✅ **标题栏恢复 `app.ico`**：左上角、窗口、托盘与安装包共用同一个图标
 - ✅ **空状态文字不再被遮挡**：移除装饰底纹，文字直接落在纯白面板上
 - ✅ **移除顶部装饰色带**：标题栏不再出现分色条
-- ✅ **随仓库分发界面字体与 OFL 许可证**：`resources/fonts/` 已解除 `.gitignore`
-  的资源目录通配忽略，源码、便携包与安装包均带齐字体
+- ✅ **界面字体改为跟随系统**：不再随包携带字体文件，移除 `resources/fonts/`
 - 🔧 **界面部件整理**：`ui_widgets.py` 只保留通用控件与按钮工厂
 - 🔧 **日志配色跟随界面**：切换主题后旧日志行按当前令牌重放
 - 🔧 **下拉框补上 ▾ 指示**：避免 QSS 边框三角形在 Qt 里糊成方块
@@ -618,7 +616,6 @@ python -m pdb main.py
 - [PySide6 (Qt)](https://www.qt.io/qt-for-python) - 原生桌面应用框架
 - [Requests](https://docs.python-requests.org/) - 人性化的HTTP库
 - [Loguru](https://github.com/Delgan/loguru) - 简单易用的日志库
-- [Saira](https://github.com/Omnibus-Type/Saira) - 字体（SIL OFL 1.1）
 
 ---
 
