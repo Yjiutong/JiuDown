@@ -12,25 +12,52 @@ import html as html_mod
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from loguru import logger
 
 import jiudown_engine
 from config_manager import config_manager
+from ui_widgets import ActionButton, field, field_join, title_pair
+from theme import C
 
-LEVEL_COLORS = {
-    "error": "#FF453A",
-    "critical": "#FF453A",
-    "warning": "#FF9F0A",
-    "success": "#30D158",
-    "info": "#6E6E73",
-    "debug": "#8E8E93",
+# 日志分级：错误用红色文字，提示用正文色，调试用灰字
+LEVEL_TONES = {
+    "error": "alert",
+    "critical": "alert",
+    "warning": "secondary",
+    "success": "ink",
+    "info": "body",
+    "debug": "faint",
 }
+
+
+def style_for(level: str) -> str:
+    """日志行的内联富文本样式，色值全部取自当前激活主题令牌"""
+    tone = LEVEL_TONES.get(str(level).lower(), "body")
+    if tone == "alert":
+        return f'color:{C["danger"]};'
+    if tone == "secondary":
+        return f'color:{C["ink2"]};'
+    if tone == "ink":
+        return f'color:{C["ink"]};'
+    if tone == "faint":
+        return f'color:{C["ink3"]};'
+    return f'color:{C["log_text"]};'
+
+
+def level_from_line(line: str) -> str:
+    """从历史日志行的 `时间 | 级别 | …` 里取出级别，取不到就按调试淡化"""
+    parts = line.split(" | ", 2)
+    if len(parts) >= 2:
+        candidate = parts[1].strip().lower()
+        if candidate in LEVEL_TONES:
+            return candidate
+    return "debug"
 
 MAX_LOG_BLOCKS = 5000
 MAX_DL_BLOCKS = 2000
@@ -92,6 +119,9 @@ class LogPage(QWidget):
         self._last_dl_count = 0
         self._restored = False          # 历史日志延迟到首次显示时加载（避免拖慢启动）
         self._rendered = 0              # 已渲染的缓冲条数
+        # 面板里已渲染的内容（主题切换时按新令牌整段重放，不留下旧配色）
+        self._entries: collections.deque = collections.deque(maxlen=MAX_LOG_BLOCKS)
+        self._dl_entries: collections.deque = collections.deque(maxlen=MAX_DL_BLOCKS)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -109,16 +139,17 @@ class LogPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # 分段面板的上边框会压住第一行文字：留出 10px 顶边距
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(12)
 
         info_row = QHBoxLayout()
         info_row.setSpacing(24)
         version = jiudown_engine.version() or "未安装"
-        self._engine_label = QLabel(f"下载引擎: yt-dlp {version}")
-        self._engine_label.setProperty("muted", True)
-        self._config_file_label = QLabel(f"配置文件: {config_manager.get_config_file_path()}")
-        self._config_file_label.setProperty("muted", True)
+        self._engine_label = field(field_join("下载引擎", f"yt-dlp {version}"))
+        self._config_file_label = field(
+            field_join("配置文件", str(config_manager.get_config_file_path()))
+        )
         info_row.addWidget(self._engine_label)
         info_row.addWidget(self._config_file_label, 1)
         layout.addLayout(info_row)
@@ -126,9 +157,9 @@ class LogPage(QWidget):
         # 控制区
         control = QHBoxLayout()
         control.setSpacing(10)
-        self._clear_button = QPushButton("清空面板")
+        self._clear_button = ActionButton("清空面板", "secondary", small=True)
         self._clear_button.clicked.connect(self._clear_panel)
-        self._open_dir_button = QPushButton("打开日志目录")
+        self._open_dir_button = ActionButton("打开日志目录", "secondary", small=True)
         self._open_dir_button.clicked.connect(self._open_log_dir)
         self._status_label = QLabel("引擎状态: 检测中…")
         self._status_label.setProperty("cssClass", "statusLabel")
@@ -146,9 +177,14 @@ class LogPage(QWidget):
         layout.addWidget(self._log_view, 1)
 
         # 下载记录
-        dl_title = QLabel("下载记录")
-        dl_title.setProperty("sectionHeader", True)
-        layout.addWidget(dl_title)
+        dl_head = QHBoxLayout()
+        dl_head.setSpacing(10)
+        dl_head.addWidget(title_pair("下载记录", "LOGS"))
+        self._dl_count_label = field("")
+        # 计数与中文标题保持同一条基线
+        dl_head.addWidget(self._dl_count_label, 0, Qt.AlignmentFlag.AlignBottom)
+        dl_head.addStretch()
+        layout.addLayout(dl_head)
 
         self._dl_view = QTextEdit()
         self._dl_view.setProperty("cssClass", "dlLogPanel")
@@ -167,23 +203,22 @@ class LogPage(QWidget):
             self._status_label.setProperty("tone", "green")
         else:
             self._status_label.setText("引擎状态: 未安装（下载不可用）")
-            self._status_label.setProperty("tone", "red")
+            self._status_label.setProperty("tone", "orange")
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
 
     # ---------------------------------------------------------------- 渲染
 
-    def _append_log(self, line: str, level: str, color: str | None = None) -> None:
-        self._append_colored(
-            self._log_view, line, color or LEVEL_COLORS.get(level.lower(), "#86868B")
-        )
+    def _append_log(self, line: str, level: str = "info", style: str | None = None) -> None:
+        self._entries.append((line, level))
+        self._append_colored(self._log_view, line, style or style_for(level))
 
     @staticmethod
-    def _append_colored(view: QTextEdit, line: str, color: str) -> None:
+    def _append_colored(view: QTextEdit, line: str, style: str) -> None:
         cursor = view.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertHtml(
-            f'<span style="color:{color};">{html_mod.escape(line)}</span><br/>'
+            f'<span style="{style}">{html_mod.escape(line)}</span><br/>'
         )
         view.setTextCursor(cursor)
         view.ensureCursorVisible()
@@ -202,10 +237,10 @@ class LogPage(QWidget):
         if not fresh:
             return
         html = "".join(
-            f'<span style="color:{LEVEL_COLORS.get(level, "#86868B")};">'
-            f"{html_mod.escape(line)}</span><br/>"
+            f'<span style="{style_for(level)}">{html_mod.escape(line)}</span><br/>'
             for line, level in fresh
         )
+        self._entries.extend(fresh)
         cursor = self._log_view.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertHtml(html)
@@ -224,10 +259,11 @@ class LogPage(QWidget):
             if not lines:
                 self._append_log("日志面板已就绪，引擎运行日志将实时显示在这里", "info")
                 return
-            color = LEVEL_COLORS["debug"]
+            pairs = [(line, level_from_line(line)) for line in lines]
+            self._entries.extend(pairs)
             html = "".join(
-                f'<span style="color:{color};">{html_mod.escape(line)}</span><br/>'
-                for line in lines
+                f'<span style="{style_for(level)}">{html_mod.escape(line)}</span><br/>'
+                for line, level in pairs
             )
             cursor = self._log_view.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -243,12 +279,22 @@ class LogPage(QWidget):
         try:
             logs = download_log_manager.load_logs()
             count = len(logs)
-            if count > self._last_dl_count:
-                for log_line in logs[self._last_dl_count:]:
-                    self._append_colored(self._dl_view, log_line, "#007AFF")
-                self._last_dl_count = count
-            elif count < self._last_dl_count:
-                self._last_dl_count = count
+            if count < self._last_dl_count:
+                # 磁盘上的记录被重置：整段重放，否则面板与计数会长期错位
+                self._dl_view.clear()
+                self._dl_entries.clear()
+                self._dl_entries.extend(logs)
+                style = style_for("body")
+                for log_line in logs:
+                    self._append_colored(self._dl_view, log_line, style)
+            elif count > self._last_dl_count:
+                fresh = logs[self._last_dl_count:]
+                self._dl_entries.extend(fresh)
+                style = style_for("body")
+                for log_line in fresh:
+                    self._append_colored(self._dl_view, log_line, style)
+            self._last_dl_count = count
+            self._dl_count_label.setText(f"共 {count} 条")
         except Exception as e:
             logger.debug(f"加载下载记录失败: {e}")
 
@@ -261,8 +307,26 @@ class LogPage(QWidget):
     # ---------------------------------------------------------------- 操作
 
     def refresh_theme(self) -> None:
-        """主题切换回调：重放状态标签内联颜色（日志面板为常驻深色控制台，不随主题反色）"""
+        """主题切换回调：内联颜色在插入时就固化，这里按新令牌整段重放"""
         self._refresh_engine_state()
+        self._replay_logs()
+
+    def _replay_logs(self) -> None:
+        """按当前主题重绘两个日志面板"""
+        html = "".join(
+            f'<span style="{style_for(level)}">{html_mod.escape(line)}</span><br/>'
+            for line, level in self._entries
+        )
+        self._log_view.clear()
+        if html:
+            cursor = self._log_view.textCursor()
+            cursor.insertHtml(html)
+        style = style_for("body")
+        self._dl_view.clear()
+        for log_line in self._dl_entries:
+            self._append_colored(self._dl_view, log_line, style)
+        self._log_view.ensureCursorVisible()
+        self._dl_view.ensureCursorVisible()
 
     def _open_log_dir(self) -> None:
         try:
@@ -276,6 +340,9 @@ class LogPage(QWidget):
         """仅清空面板显示（磁盘日志保留，便于事后排查）"""
         self._log_view.clear()
         self._rendered = len(snapshot_buffer())
+        self._entries.clear()
         self._dl_view.clear()
+        self._dl_entries.clear()
         self._last_dl_count = 0
+        self._dl_count_label.setText("共 0 条")
         self._append_log("面板已清空（磁盘日志文件仍保留，可在日志目录查看）", "info")

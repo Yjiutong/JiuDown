@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""验证发布产物：portable zip 内容、setup 脚本、FFmpeg 依赖、校验值
+"""验证发布产物：portable 自解压 exe、setup 安装包、FFmpeg 依赖、校验值
 
 防回归的重点：
 1. 发布包里不能混入 TEMP/、tools/、.git/、__pycache__ 等开发期文件
@@ -11,6 +11,7 @@
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -23,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 DIST = ROOT / "dist"
 ISS = ROOT / "build" / "release" / "JiuDownSetup.iss"
+VENDOR_7Z = ROOT / "tools" / "_vendor" / "7zip" / "7z.exe"
 
 PASS, FAIL = [], []
 
@@ -34,7 +36,7 @@ def check(name: str, cond: bool, extra: str = "") -> None:
 
 # ---------------------------------------------------------------- PE 导入表
 def imported_dlls(path: Path) -> set:
-    """解析 PE 导入表拿到依赖的 DLL 名（只依赖标准库，发布机也能跑）"""
+    """解析 PE 导入表拿到依赖的 DLL 名"""
     data = path.read_bytes()
     pe = int.from_bytes(data[0x3C:0x40], "little")
     if data[pe:pe + 4] != b"PE\0\0":
@@ -86,28 +88,31 @@ def imported_dlls(path: Path) -> set:
 FORBIDDEN_DLL = ("LIBWINPTHREAD", "LIBGCC_S", "LIBSTDC++", "MSYS-", "CYG", "LIBQUADMATH")
 
 # ---------------------------------------------------------------- 1. 产物存在
-zips = sorted(DIST.glob("JiuDown-Portable-*.zip"))
+zips = sorted(DIST.glob("JiuDown-Portable-*.exe"))
 exes = sorted(DIST.glob("JiuDown-Setup-*.exe"))
-check("dist 下有 portable 压缩包", len(zips) == 1, str([p.name for p in zips]))
+check("dist 下有 portable 自解压 exe", len(zips) == 1, str([p.name for p in zips]))
 check("dist 下有 setup 安装包", len(exes) == 1, str([p.name for p in exes]))
 if not zips or not exes:
     print("\n（缺少产物，跳过后续检查；先跑 tools/build_release.py）")
     print(f"\n===== {len(PASS)} passed, {len(FAIL)} failed =====")
     sys.exit(1 if FAIL else 0)
 
-version = zips[0].name[len("JiuDown-Portable-"):-len(".zip")]
+version = zips[0].name[len("JiuDown-Portable-"):-len(".exe")]
 check("两个产物版本号一致", exes[0].name == f"JiuDown-Setup-{version}.exe",
       f"{zips[0].name} / {exes[0].name}")
 
-# ---------------------------------------------------------------- 2. zip 内容
+# ---------------------------------------------------------------- 2. 包内容
 FORBIDDEN_PREFIX = ("JiuDown/TEMP/", "JiuDown/tools/", "JiuDown/.git/",
                     "JiuDown/logs/", "JiuDown/config/", "JiuDown/Download/")
 REQUIRED = (
     "JiuDown/app.py",
     "JiuDown/theme.py",
+    "JiuDown/ui_widgets.py",
     "JiuDown/启动.vbs",
     "JiuDown/pages/home_page.py",
     "JiuDown/resources/app.ico",
+    "JiuDown/resources/fonts/Saira.ttf",
+    "JiuDown/resources/fonts/Saira-OFL.txt",
     "JiuDown/resources/ffmpeg.exe",
     "JiuDown/runtime/python/python.exe",
     "JiuDown/runtime/python/pythonw.exe",
@@ -116,8 +121,39 @@ REQUIRED = (
     "JiuDown/build_components/manifest.json",
 )
 
-with zipfile.ZipFile(zips[0]) as archive:
-    names = set(archive.namelist())
+def list_sfx(portable: Path) -> list:
+    """用 7z.exe 读取自解压 exe 的文件清单（7z.sfx 只认 7z 归档）"""
+    if not VENDOR_7Z.exists():
+        return []
+    proc = subprocess.run(
+        [str(VENDOR_7Z), "l", "-ba", "-slt", "-sccUTF-8", str(portable)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        return []
+    names = []
+    path = None
+    is_dir = False
+
+    def flush():
+        if path and not is_dir and path != str(portable):
+            names.append(path.replace("\\", "/"))
+
+    for line in proc.stdout.splitlines() + ["Path = "]:
+        if line.startswith("Path = "):
+            flush()
+            path = line[len("Path = "):].strip()
+            is_dir = False
+        elif line.startswith("Attributes = "):
+            attrs = line[len("Attributes = "):].strip()
+            is_dir = attrs.startswith("D")
+    return names
+
+
+names = set(list_sfx(zips[0]))
+check("portable 能按 7z 归档读取（SFX 内容有效）", bool(names),
+      f"{len(names)} 个文件")
+if names:
     check("包内顶层目录是 JiuDown/", all(n.startswith("JiuDown/") for n in names))
     for req in REQUIRED:
         check(f"包含 {req}", req in names)
@@ -127,6 +163,7 @@ with zipfile.ZipFile(zips[0]) as archive:
     check("含便携版使用说明", any(n.endswith("使用说明.txt") for n in names))
     check("runtime 内带 yt-dlp",
           any(n.startswith("JiuDown/runtime/python/Lib/site-packages/yt_dlp/") for n in names))
+    check("不含旧风格模块 endfield.py", "JiuDown/endfield.py" not in names)
 
 # ---------------------------------------------------------------- 3. iss 静态检查
 if ISS.exists():

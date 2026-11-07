@@ -9,9 +9,9 @@
 
 import threading
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from loguru import logger
@@ -19,6 +19,10 @@ from loguru import logger
 import ffmpeg_manager
 import jiudown_engine
 from config_manager import config_manager
+from ui_widgets import (
+    ActionButton, attach_panel, field, field_join, set_css_class, set_styled, state_box,
+    title_pair,
+)
 from system_info import system_info
 
 
@@ -88,13 +92,13 @@ class HomePage(QWidget):
             self._ffmpeg_download_btn.hide()
         elif status == "failed":
             self._ffmpeg_value.setText("拉取失败")
-            self._set_value_tone(self._ffmpeg_value, "red")
+            self._set_value_tone(self._ffmpeg_value, "orange")
             self._ffmpeg_sub.setText("下载失败，可重试，或手动放入 resources 目录")
             self._ffmpeg_download_btn.setText("重试下载")
             self._ffmpeg_download_btn.show()
         else:  # missing
             self._ffmpeg_value.setText("未找到")
-            self._set_value_tone(self._ffmpeg_value, "red")
+            self._set_value_tone(self._ffmpeg_value, "orange")
             self._ffmpeg_sub.setText("首次使用会自动下载精简版（约 5MB），也可手动放入 resources 目录")
             self._ffmpeg_download_btn.setText("下载 FFmpeg")
             self._ffmpeg_download_btn.show()
@@ -139,10 +143,11 @@ class HomePage(QWidget):
         ok = bool(info["ytdlp_ready"])
         ytdlp_ver = info["ytdlp_version"] or "未安装"
         self._engine_line.setText(
-            f"引擎: JiuDown {info['version']}（原生 B 站 + yt-dlp {ytdlp_ver}）"
+            field_join("引擎", f"JiuDown {info['version']}",
+                       f"原生 B 站 + yt-dlp {ytdlp_ver}")
         )
         backend_text = jiudown_engine.BACKEND_LABELS.get(info["mode"], info["mode"])
-        self._backend_line.setText(f"后端路由: {backend_text}")
+        self._backend_line.setText(field_join("后端路由", backend_text))
 
         state = ffmpeg_manager.get_status()
         label = {"full": "完整版", "ready": "精简版", "lite": "能力不足",
@@ -151,64 +156,63 @@ class HomePage(QWidget):
             # 能力不足时启动流程仍会补内置精简版，不能写成"无需下载"
             usable = state["status"] in ("full", "ready")
             label += "（系统 PATH，无需下载）" if usable else "（系统 PATH，能力不足）"
-        self._ffmpeg_line.setText(f"FFmpeg: {label}")
+        self._ffmpeg_line.setText(field_join("FFmpeg", label))
 
         try:
             browser = str(config_manager.get_config("cookies_from_browser") or "不使用")
             proxy = str(config_manager.get_config("proxy") or "").strip()
         except Exception:
             browser, proxy = "不使用", ""
-        cookie_text = browser if browser and browser != "不使用" else "未配置（登录站点可能受限）"
-        self._cookie_line.setText(f"Cookie: 浏览器 {cookie_text}" if browser != "不使用" else f"Cookie: {cookie_text}")
-        self._proxy_line.setText(f"代理: {proxy or '未配置'}")
+        if browser and browser != "不使用":
+            cookie_text = f"浏览器 {browser}"
+        else:
+            cookie_text = "未配置（登录站点可能受限）"
+        self._cookie_line.setText(field_join("Cookie", cookie_text))
+        self._proxy_line.setText(field_join("代理", proxy or "未配置"))
 
         if ok:
-            self._set_badge("green", "就绪")
+            self._set_badge("solid", "就绪")
             self._diag_message.setText(
                 "B 站走原生链路、其余站点走 yt-dlp；解析失败时先更新 yt-dlp 后端，"
                 "需要登录的内容请在设置中选择浏览器 Cookie"
             )
+            set_css_class(self._diag_message, "cardSub")
         else:
-            self._set_badge("orange", "部分就绪")
+            self._set_badge("alert", "部分就绪")
             self._diag_message.setText(
                 "原生 B 站链路可用；yt-dlp 后端未安装，B 站以外的站点无法下载，建议修复依赖"
             )
+            set_css_class(self._diag_message, "alertText")
 
     # ---------------------------------------------------------------- UI
 
-    def _make_status_card(self, title: str) -> tuple[QFrame, QLabel, QLabel]:
-        """创建状态卡片，返回 (卡片, 主值标签, 副值标签)"""
+    def _make_status_card(self, title: str, en: str = "") -> tuple[QFrame, QLabel, QLabel]:
+        """看板面板：标题、数字与说明行"""
         frame = QFrame()
         frame.setProperty("cssClass", "card")
+        attach_panel(frame)
         vbox = QVBoxLayout(frame)
-        vbox.setContentsMargins(16, 14, 16, 14)
+        vbox.setContentsMargins(16, 18, 16, 14)
         vbox.setSpacing(6)
 
-        top = QHBoxLayout()
-        top.setSpacing(8)
-        title_label = QLabel(title)
-        title_label.setProperty("cssClass", "cardTitle")
-        top.addWidget(title_label)
-        top.addStretch()
+        vbox.addWidget(title_pair(title, en))
 
         value_label = QLabel("—")
         value_label.setProperty("cssClass", "cardValue")
         value_label.setWordWrap(True)
+        set_styled(value_label)
         sub_label = QLabel("")
         sub_label.setProperty("cssClass", "cardSub")
         sub_label.setWordWrap(True)
 
-        vbox.addLayout(top)
         vbox.addWidget(value_label)
         vbox.addWidget(sub_label)
         vbox.addStretch()
         return frame, value_label, sub_label
 
-    def _make_hash_label(self, prefix: str) -> QLabel:
-        """创建等宽字体的信息行（沿用原 Hash 行的视觉效果）"""
-        label = QLabel(f"{prefix}: —")
-        label.setProperty("cssClass", "hashLabel")
-        return label
+    def _make_info_field(self, prefix: str) -> QLabel:
+        """等宽信息行：字段之间用竖线分隔，不写「·」"""
+        return field(field_join(prefix, "—"))
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -219,24 +223,25 @@ class HomePage(QWidget):
         cards_row = QHBoxLayout()
         cards_row.setSpacing(14)
 
-        self._engine_card, self._engine_value, self._engine_sub = self._make_status_card("JiuDown 引擎")
+        self._engine_card, self._engine_value, self._engine_sub = self._make_status_card(
+            "JiuDown 引擎", "ENGINE")
         self._engine_value.setProperty("cssClass", "cardValueSmall")
-        self._sites_card, self._sites_value, self._sites_sub = self._make_status_card("支持站点")
+        self._sites_card, self._sites_value, self._sites_sub = self._make_status_card(
+            "支持站点", "SITES")
         self._sites_value.setProperty("cssClass", "cardValueSmall")
-        self._ffmpeg_card, self._ffmpeg_value, self._ffmpeg_sub = self._make_status_card("FFmpeg")
+        self._ffmpeg_card, self._ffmpeg_value, self._ffmpeg_sub = self._make_status_card(
+            "FFmpeg", "FFMPEG")
         self._ffmpeg_value.setProperty("cssClass", "cardValueSmall")
         self._ffmpeg_btn_row = QHBoxLayout()
         self._ffmpeg_btn_row.setSpacing(8)
-        self._ffmpeg_download_btn = QPushButton("下载 FFmpeg")
-        self._ffmpeg_download_btn.setProperty("small", True)
-        self._ffmpeg_download_btn.setProperty("primary", True)
-        self._ffmpeg_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ffmpeg_download_btn = ActionButton("下载 FFmpeg", "primary", small=True)
         self._ffmpeg_download_btn.clicked.connect(self._on_ffmpeg_download)
         self._ffmpeg_btn_row.addWidget(self._ffmpeg_download_btn)
         self._ffmpeg_btn_row.addStretch()
         self._ffmpeg_card.layout().addLayout(self._ffmpeg_btn_row)
         self._ffmpeg_download_btn.hide()
-        self._system_card, self._system_value, self._system_sub = self._make_status_card("系统环境")
+        self._system_card, self._system_value, self._system_sub = self._make_status_card(
+            "系统环境", "SYSTEM")
         self._system_value.setProperty("cssClass", "cardValueSmall")
 
         for card in (self._engine_card, self._sites_card, self._ffmpeg_card, self._system_card):
@@ -246,27 +251,24 @@ class HomePage(QWidget):
         # ---- 引擎诊断卡片 ----
         self._diag_card = QFrame()
         self._diag_card.setProperty("cssClass", "card")
+        attach_panel(self._diag_card)
         diag_vbox = QVBoxLayout(self._diag_card)
-        diag_vbox.setContentsMargins(16, 14, 16, 14)
+        diag_vbox.setContentsMargins(16, 18, 16, 14)
         diag_vbox.setSpacing(8)
 
         diag_top = QHBoxLayout()
         diag_top.setSpacing(8)
-        diag_title = QLabel("引擎诊断")
-        diag_title.setProperty("cssClass", "sectionTitle")
-        self._hash_badge = QLabel("检测中")
-        self._hash_badge.setProperty("cssClass", "badge")
-        self._hash_badge.setProperty("badge", "gray")
-        diag_top.addWidget(diag_title)
+        diag_top.addWidget(title_pair("引擎诊断", "DIAGNOSTICS"))
+        self._hash_badge = state_box("检测中", "backstage")
         diag_top.addWidget(self._hash_badge)
         diag_top.addStretch()
         diag_vbox.addLayout(diag_top)
 
-        self._engine_line = self._make_hash_label("引擎")
-        self._backend_line = self._make_hash_label("后端路由")
-        self._ffmpeg_line = self._make_hash_label("FFmpeg")
-        self._cookie_line = self._make_hash_label("Cookie")
-        self._proxy_line = self._make_hash_label("代理")
+        self._engine_line = self._make_info_field("引擎")
+        self._backend_line = self._make_info_field("后端路由")
+        self._ffmpeg_line = self._make_info_field("FFmpeg")
+        self._cookie_line = self._make_info_field("Cookie")
+        self._proxy_line = self._make_info_field("代理")
         self._diag_message = QLabel("")
         self._diag_message.setProperty("cssClass", "cardSub")
         self._diag_message.setWordWrap(True)
@@ -278,11 +280,9 @@ class HomePage(QWidget):
         # ---- 操作区 ----
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
-        self._action_button = QPushButton("更新下载引擎")
-        self._action_button.setProperty("primary", True)
-        self._action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._action_button = ActionButton("更新下载引擎", "cta")
         self._action_button.clicked.connect(self._update_engine)
-        self._refresh_button = QPushButton("重新检测")
+        self._refresh_button = ActionButton("重新检测", "secondary")
         self._refresh_button.clicked.connect(self._reload_state)
         action_row.addWidget(self._action_button)
         action_row.addWidget(self._refresh_button)
@@ -330,12 +330,12 @@ class HomePage(QWidget):
         label.style().unpolish(label)
         label.style().polish(label)
 
-    def _set_badge(self, tone: str, text: str) -> None:
-        self._hash_badge.setProperty("badge", tone)
-        self._hash_badge.setProperty("cssClass", "badge")
+    def _set_badge(self, kind: str, text: str) -> None:
+        """实线墨框=生效，虚线=后台，黄块=要看一眼；红色只留给删除"""
+        css = {"solid": "badgeGreen", "backstage": "badgeGray",
+               "alert": "badgeOrange", "neutral": "badgeGray"}[kind]
         self._hash_badge.setText(text)
-        self._hash_badge.style().unpolish(self._hash_badge)
-        self._hash_badge.style().polish(self._hash_badge)
+        set_css_class(self._hash_badge, css)
 
     def _reload_state(self) -> None:
         """点击「重新检测」：刷新全部状态"""

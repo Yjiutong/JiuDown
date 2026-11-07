@@ -1,21 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""发布构建：生成 portable 压缩包与 setup 安装包
+"""发布构建：生成 portable 与 setup 两个 exe
 
 产物落在 dist/ 下（.gitignore 已忽略）：
 
-    JiuDown-Portable-<ver>.zip   解压即用（内含完整的离线运行时）
+    JiuDown-Portable-<ver>.exe  7-Zip 自解压便携版（内含完整的离线运行时）
     JiuDown-Setup-<ver>.exe      Inno Setup 安装程序（开始菜单/桌面快捷方式 + 卸载项）
     SHA256SUMS.txt               两个产物的校验值
 
 用法：
     runtime\\python\\python.exe tools/build_release.py            # 两个都构建
-    runtime\\python\\python.exe tools/build_release.py --only zip
+    runtime\\python\\python.exe tools/build_release.py --only portable
     runtime\\python\\python.exe tools/build_release.py --only setup
-    runtime\\python\\python.exe tools/build_release.py --version 1.1.0
+    runtime\\python\\python.exe tools/build_release.py --version 1.2.0
 
 两个产物内容完全一致，差别只在形态：
-- portable：整个目录压缩，解压到任意位置（U 盘也行）双击 启动.vbs 即用，
+- portable：自解压 exe，解压到任意位置（U 盘也行）双击 启动.vbs 即用，
   配置/下载/日志都写在该目录里（便携模式）。
 - setup：装到 Program Files，程序目录只读，用户数据自动落到
   %LOCALAPPDATA%\\JiuDown，下载默认进系统「下载」文件夹（见 system_info）。
@@ -25,6 +25,7 @@ setup 需要 Inno Setup 编译器（ISCC.exe）。默认使用 tools/_vendor/inn
 """
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -36,6 +37,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build" / "release"
 VENDOR_ISCC = ROOT / "tools" / "_vendor" / "innosetup" / "ISCC.exe"
+VENDOR_7Z = ROOT / "tools" / "_vendor" / "7zip" / "7z.exe"
+VENDOR_7Z_URL = "https://www.7-zip.org/a/7z2301-x64.exe"
 
 APP_NAME = "JiuDown"
 # 固定 AppId：升级安装才能正确覆盖旧版本（不要每次生成新的）
@@ -49,8 +52,9 @@ PORTABLE_NOTICE = """JiuDown 便携版（Portable）
 ================================
 
 【怎么用】
-  1. 解压到任意文件夹（U 盘也可以，路径不要含特殊字符）
-  2. 双击「启动.vbs」即可运行（无控制台窗口）
+  1. 把 Portable exe 放到想放的位置（U 盘也可以，路径不要含特殊字符）
+  2. 双击 exe，会在 exe 旁边解压出 JiuDown 目录
+  3. 进入 JiuDown 目录，双击「启动.vbs」即可运行（无控制台窗口）
      —— 也可以直接运行 runtime\\python\\pythonw.exe app.py
 
 【数据放哪】
@@ -167,28 +171,119 @@ def refresh_ffmpeg_lite_zip() -> Path:
     return target
 
 
-def build_portable_zip(version: str) -> Path:
-    """生成 portable 压缩包（顶层目录 JiuDown\\）"""
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    target = OUT_DIR / f"{APP_NAME}-Portable-{version}.zip"
-    tmp = target.with_suffix(".zip.part")
-    tmp.unlink(missing_ok=True)
+def build_portable_exe(version: str) -> Path:
+    """生成 7-Zip 自解压便携 exe（包内顶层是 JiuDown\\）
 
+    注意：7z.sfx 只能解 7z 归档，不能直接拼接 ZIP；且带 Installer 配置块会被
+    Windows 当成安装包而触发提权（实测 /S 直接 740）。这里用无配置 SFX +
+    标准 7z 归档，双击后解压到 exe 同级目录，静默参数 /S 也能稳定工作。
+    """
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    target = OUT_DIR / f"{APP_NAME}-Portable-{version}.exe"
+    archive_path = BUILD_DIR / f"{APP_NAME}-Portable-{version}.7z"
+    stage = BUILD_DIR / "portable_stage"
+    payload_root = stage / APP_NAME
+    sfx = find_7z_sfx()
+    seven_zip = find_7z_exe()
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    archive_path.unlink(missing_ok=True)
+    target.unlink(missing_ok=True)
+
+    if stage.exists():
+        shutil.rmtree(stage)
+    payload_root.mkdir(parents=True)
+    (payload_root / "使用说明.txt").write_text(PORTABLE_NOTICE, encoding="utf-8")
     count = 0
     total = 0
-    # 便携版说明直接写进包里（zipfile 支持 writestr）
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        archive.writestr(f"{APP_NAME}/使用说明.txt", PORTABLE_NOTICE)
-        for src, rel in iter_release_files():
-            archive.write(src, f"{APP_NAME}/{rel}")
-            count += 1
-            total += src.stat().st_size
-            if count % 1000 == 0:
-                print(f"  … 已加入 {count} 个文件")
-    tmp.replace(target)
+    for src, rel in iter_release_files():
+        dst = payload_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+        count += 1
+        total += src.stat().st_size
+        if count % 1000 == 0:
+            print(f"  … 已加入 {count} 个文件")
+
+    proc = subprocess.run(
+        [str(seven_zip), "a", "-t7z", "-mx=9", str(archive_path), APP_NAME],
+        cwd=str(stage),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if proc.returncode != 0 or not archive_path.exists():
+        raise SystemExit(f"7z 压缩失败（exit={proc.returncode}）\n{proc.stdout}\n{proc.stderr}")
+
+    with target.open("wb") as dst:
+        dst.write(sfx.read_bytes())
+        dst.write(archive_path.read_bytes())
+    archive_path.unlink()
+    shutil.rmtree(stage, ignore_errors=True)
     print(f"[OK] portable: {target.name}  ({count} 个文件，源 {total / 1048576:.0f} MB，"
           f"压后 {target.stat().st_size / 1048576:.1f} MB)")
     return target
+
+
+def ensure_7z_tools() -> Path:
+    """确保 tools/_vendor/7zip 内有 7z.exe 与 7z.sfx；缺失时从官方安装包提取"""
+    target_dir = VENDOR_7Z.parent
+    sfx = target_dir / "7z.sfx"
+    if VENDOR_7Z.exists() and sfx.exists():
+        return sfx
+    target_dir.mkdir(parents=True, exist_ok=True)
+    archive = target_dir / "7z-extra.7z"
+    if not archive.exists():
+        import urllib.request
+        print(f"  下载 7-Zip extra 包：{VENDOR_7Z_URL}")
+        urllib.request.urlretrieve(VENDOR_7Z_URL, archive)
+    proc = subprocess.run(
+        [str(VENDOR_7Z if VENDOR_7Z.exists() else _bootstrap_7zr()),
+         "e", str(archive), "-o" + str(target_dir),
+         "7z.sfx", "7z.exe", "7z.dll", "-y"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0 or not sfx.exists():
+        raise SystemExit(f"7-Zip 安装包解包失败：{proc.stdout}\n{proc.stderr}")
+    archive.unlink(missing_ok=True)
+    return sfx
+
+
+def _bootstrap_7zr() -> Path:
+    """先用官方单文件 7zr.exe 展开安装包，再把完整 7z.exe 留下备用"""
+    target = VENDOR_7Z.parent / "7zr.exe"
+    if not target.exists():
+        import urllib.request
+        urllib.request.urlretrieve("https://www.7-zip.org/a/7zr.exe", target)
+    return target
+
+
+def find_7z_sfx() -> Path:
+    """返回 GUI 自解压模块，必要时补齐本地 7-Zip 工具"""
+    for path in (VENDOR_7Z.parent / "7z.sfx",
+                 Path("C:/Program Files/7-Zip/7z.sfx"),
+                 Path("C:/Program Files (x86)/7-Zip/7z.sfx")):
+        if path.exists() and VENDOR_7Z.exists():
+            return path
+    return ensure_7z_tools()
+
+
+def find_7z_exe() -> Path:
+    """返回 7z.exe：优先随仓库的 vendor，其次系统安装目录"""
+    for path in (VENDOR_7Z,
+                 Path("C:/Program Files/7-Zip/7z.exe"),
+                 Path("C:/Program Files (x86)/7-Zip/7z.exe")):
+        if path.exists():
+            return path
+    raise SystemExit(
+        "未找到 7z.exe。\n"
+        "  下载：https://www.7-zip.org/a/7z2301-x64.exe\n"
+        f"  或放到：{VENDOR_7Z}"
+    )
+
 
 
 # ---------------------------------------------------------------- Inno Setup
@@ -334,9 +429,60 @@ def write_sha256(files: list[Path]) -> Path:
     return sums
 
 
+def write_release_notes(version: str, artifacts: list[Path]) -> Path:
+    """生成简洁的 Release 说明"""
+    digest_lines = []
+    for path in artifacts:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest_lines.append(f"{digest}  {path.name}")
+    sizes = {path.name: path.stat().st_size / 1048576 for path in artifacts}
+    portable_name = f"{APP_NAME}-Portable-{version}.exe"
+    setup_name = f"{APP_NAME}-Setup-{version}.exe"
+    asset_rows = []
+    if portable_name in sizes:
+        asset_rows.append(
+            f"| `{portable_name}` | {sizes[portable_name]:.0f} MB | "
+            "自解压便携版，双击后在 exe 同级解压出 `JiuDown\\`，运行 `启动.vbs` |"
+        )
+    if setup_name in sizes:
+        asset_rows.append(
+            f"| `{setup_name}` | {sizes[setup_name]:.0f} MB | "
+            "一键安装，包含开始菜单/桌面快捷方式与卸载项 |"
+        )
+    asset_rows.append("| `SHA256SUMS.txt` | — | 产物的校验值 |")
+    notes = f"""# JiuDown v{version}
+
+计划标签：`v{version}`（主发布） / `portable_v{version}`（便携版）
+
+## 变更
+
+- 界面统一为通体洁白：白色表面、深灰文字、浅灰分隔线
+- 左侧导航支持展开/收起，两态共用固定行高与图标位置
+- 空状态直接落在纯白底上，文字不再被背景遮挡
+- 标题栏、窗口与托盘继续使用 `resources/app.ico`
+- 随仓库分发界面字体与 OFL 许可证；源码、便携包与安装包均带齐字体
+
+## 发布资产
+
+| 文件 | 大小 | 说明 |
+|---|---:|---|
+{chr(10).join(asset_rows)}
+
+## SHA256
+
+```
+{chr(10).join(digest_lines)}
+```
+"""
+    path = OUT_DIR / f"RELEASE_NOTES_v{version}.md"
+    path.write_text(notes, encoding="utf-8")
+    print(f"[OK] release notes:  {path.name}")
+    return path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="构建 JiuDown 发布产物")
-    parser.add_argument("--only", choices=("zip", "setup", "all"), default="all",
+    parser.add_argument("--only", choices=("portable", "setup", "all"), default="all",
                         help="只构建其中一个（默认两个都构建）")
     parser.add_argument("--version", default=None, help="覆盖 theme.py 里的 APP_VERSION")
     parser.add_argument("--iscc", default=None, help="指定 ISCC.exe 路径")
@@ -350,17 +496,18 @@ def main() -> None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     produced: list[Path] = []
-    if args.only in ("zip", "all"):
-        produced.append(build_portable_zip(version))
+    if args.only in ("portable", "all"):
+        produced.append(build_portable_exe(version))
     if args.only in ("setup", "all"):
         produced.append(build_setup_exe(version, args.iscc))
 
     if produced:
         write_sha256(produced)
+        write_release_notes(version, produced)
         print("\n产物：")
         for path in produced:
             print(f"  {path}")
-    print("\n发布到 GitHub Release 时把 dist/ 下这几个文件一起上传即可。")
+    print("\n发布到 GitHub Release 时把 dist/ 下两个 exe、SHA256SUMS.txt 与 RELEASE_NOTES 一起上传即可。")
 
 
 if __name__ == "__main__":

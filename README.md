@@ -67,11 +67,11 @@ JiuDown（玖号下载器）是一个基于 Python 开发的全功能视频下�
 
 ### 0. 直接下载发布包（普通用户推荐）
 
-Release 上提供两个**内容完全一致**、只是形态不同的包（由 `tools/build_release.py` 构建）：
+Release 上提供两个**内容完全一致**、只是形态不同的 exe（由 `tools/build_release.py` 构建）：
 
 | 产物 | 大小 | 适合谁 | 说明 |
 |---|---|---|---|
-| `JiuDown-Portable-<版本>.zip` | 约 110MB | 想解压就用、放 U 盘随身携带 | 解压到任意目录 → 双击 `启动.vbs`。配置/下载/日志全在该目录里，整个目录拷走即迁移，删目录即卸载 |
+| `JiuDown-Portable-<版本>.exe` | 约 70MB | 想解压就用、放 U 盘随身携带 | 双击后在 exe 同级解压出 `JiuDown\` → 双击其中的 `启动.vbs`。配置/下载/日志全在该目录里，整个目录拷走即迁移，删目录即卸载 |
 | `JiuDown-Setup-<版本>.exe` | 约 74MB | 想正规安装、要有开始菜单和卸载项 | 装到 `Program Files`，开始菜单/桌面快捷方式、控制面板卸载项齐全 |
 
 两者都自带完整的离线运行环境（Python 3.12 + PySide6 + yt-dlp + 精简版 FFmpeg），
@@ -175,8 +175,8 @@ Release 是**可选的更新通道**：想让已装好的老用户增量拿到�
 ## 构建发布包
 
 ```bash
-runtime\python\python.exe tools/build_release.py            # zip + setup 都构建
-runtime\python\python.exe tools/build_release.py --only zip   # 只打便携版
+runtime\python\python.exe tools/build_release.py            # portable + setup 都构建
+runtime\python\python.exe tools/build_release.py --only portable   # 只打便携版
 runtime\python\python.exe tools/build_release.py --version 1.1.0
 ```
 
@@ -184,22 +184,22 @@ runtime\python\python.exe tools/build_release.py --version 1.1.0
 
 | 文件 | 说明 |
 |---|---|
-| `JiuDown-Portable-<版本>.zip` | 约 110MB，解压即用 |
+| `JiuDown-Portable-<版本>.exe` | 约 70MB，自解压后在 exe 同级得到 `JiuDown\` |
 | `JiuDown-Setup-<版本>.exe` | 约 74MB，Inno Setup 安装程序 |
 | `SHA256SUMS.txt` | 两个产物的校验值 |
 
-两个包装的内容完全一致：源码 + `runtime\` + `resources\`（含 FFmpeg）+ `build_components\`
+两个 exe 包含的内容完全一致：源码 + `runtime\` + `resources\`（含 FFmpeg）+ `build_components\`
 里的三个离线修复包（manifest / engine / ffmpeg-lite）。
 
-**setup 版需要 Inno Setup 编译器**（只用来编译安装脚本，不随仓库分发）：
+**构建需要便携版 7-Zip 自解压模块与 Inno Setup 编译器**（均不随仓库分发）：
 
 ```bash
 # 官网 https://jrsoftware.org/isdl.php ；便携解压方式（不写注册表、不装进系统）
 innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tools\_vendor\innosetup"
 ```
 
-脚本会自动找 `tools\_vendor\innosetup\ISCC.exe`，找不到会打印下载地址；
-已有 Inno Setup 时用 `--iscc <路径>` 指定。构建前会自检 runtime / FFmpeg / 图标是否齐全，
+脚本会找 `tools\_vendor\7zip\7z.sfx` 与 `tools\_vendor\innosetup\ISCC.exe`，
+找不到会打印提示；已有 Inno Setup 时用 `--iscc <路径>` 指定。构建前会自检 runtime / FFmpeg / 图标是否齐全，
 并自动用 `resources\` 重建 `ffmpeg-lite.zip`（含 FFmpeg 依赖的 MinGW 运行库）。
 
 > `tools/build_release.py` 的 precheck 会校验包内不含开发期文件（TEMP / tools / .git /
@@ -220,25 +220,9 @@ innosetup-7.1.0-x64.exe /VERYSILENT /CURRENTUSER /PORTABLE=1 /DIR="<仓库>\tool
 | `verify_douyin_note.py` | 抖音图文：形态识别与路由顺序、无水印原图挑选与逐张候选重试、多图落盘、卡片张数呈现 |
 | `check_subprocess_encoding.py` | 静态扫描：所有 `text=True` 的子进程调用必须显式 `encoding`/`errors`（中文路径下不写会吞掉 ffmpeg 错误信息） |
 | `verify_install_mode.py` / `check_installed_mode.py` | 便携 / 安装两种形态的数据目录推导与恢复 |
+| `verify_ui_screens.py` | 界面出图自检：每个页面、预览面板与侧栏两态各出一张 PNG |
 
 这些脚本一律**由自身位置推导仓库根**，不写死任何绝对路径，可从任意目录调用。
-
-### 单文件 exe（可选，不是发布物）
-
-`JiuDownDesktop.spec` 另外能出一个把 PySide6 + yt-dlp 收进去的单文件 exe（约 104MB）：
-
-```bash
-runtime\python\python.exe -m pip install pyinstaller
-runtime\python\python.exe -m PyInstaller --noconfirm JiuDownDesktop.spec   # 产物在 dist\
-```
-
-必须用 `runtime\python\python.exe` 来打（它才是装着 PySide6/yt-dlp 的那个解释器；
-系统 Python 里没有这些包）。**打完记得把 pyinstaller 卸掉再跑 `build_components.py`**，
-否则 `core.zip` 会把构建工具一起装给用户。
-
-这个 exe 与上面两个包是两条独立路线：它自带解释器，所以启动时会跳过内嵌 `runtime\`
-的自检与补齐（`app.py` 的 frozen 分支），不会去下载 339MB 的 runtime.zip。
-它的定位是「开发期快速起一个二进制入口」，给用户的仍然是 Portable zip 与 Setup。
 
 ## 项目结构
 
@@ -246,7 +230,8 @@ runtime\python\python.exe -m PyInstaller --noconfirm JiuDownDesktop.spec   # 产
 JiuDown/                       （仓库只含源码，二进制依赖首跑自动拉取）
 ├── app.py                     # 主程序入口（配置初始化 + 窗口 + 后台自检）
 ├── main_window.py             # 主窗口（侧边导航 + 页面栈 + 托盘）
-├── theme.py                   # 主题令牌与 QSS（Apple HIG，双主题）
+├── theme.py                   # 纯白主题令牌与 QSS
+├── ui_widgets.py             # 通用 Qt 部件与按钮工厂
 ├── async_bridge.py            # asyncio 后台线程桥（下载调度）
 ├── jiudown_engine.py          # JiuDown 引擎：多后端路由门面 + 原生 B 站链路
 ├── douyin_engine.py           # 原生抖音图文链路（图集 → 无水印原图文件夹）
@@ -271,9 +256,9 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 │   └── verify/                # 发布前回归验证脚本（自带断言，仓库相对锚定）
 ├── 启动.vbs                   # 无控制台启动器（自动探测解释器）
 ├── 首次安装.bat               # 首次安装：拉取离线运行时
-├── JiuDownDesktop.spec        # PyInstaller 打包配置（相对路径）
 ├── requirements.txt
-├── resources/app.ico          # 唯一入库的二进制资源（图标）
+├── resources/app.ico          # 入库的二进制资源（图标）
+├── resources/fonts/           # 界面字体 + OFL 许可证
 └── config/ Download/ TEMP/ logs/ runtime/   # 运行时生成，已 gitignore
 ```
 
@@ -298,7 +283,15 @@ JiuDown/                       （仓库只含源码，二进制依赖首跑自�
 asyncio 后台线程桥，让基于 asyncio 的下载调度与 Qt 事件循环共存。
 
 ### theme.py
-全局 QSS 样式表与配色常量，统一定义界面视觉规范。
+全局 QSS 样式表与配色令牌统一定义纯白界面：白色表面、深灰文字、浅灰分隔线。
+旧键名通过别名表落到新令牌上，业务代码取色只走 `theme.C["…"]`。
+
+### ui_widgets.py
+通用 Qt 界面部件，保留页面使用的工厂函数：
+- `ActionButton`：浅灰按钮、蓝色主按钮与键盘焦点
+- `title_pair()` / `eyebrow()` / `field()` / `number_tag()`：标题、字段、编号标签
+- `Backdrop`：纯白页面底
+- 下拉框指示与通用辅助函数
 
 ### config_manager.py
 配置管理模块，提供：
@@ -444,7 +437,7 @@ A: 日志文件保存在 `logs` 目录下，按日期分割。
 
 ### 前端技术
 - **PySide6 (Qt)**: Python 官方推荐的 Qt 绑定，原生桌面界面
-- **QSS**: Qt 样式表，统一的设计规范（品牌色、卡片、徽章）
+- **QSS**: Qt 样式表 + `ui_widgets.py` 通用部件，白色表面与 1px 浅灰细线
 - **异步刷新**: QTimer 定时轮询 + Qt 信号跨线程通信
 
 ### 后端技术
@@ -522,6 +515,26 @@ python -m pdb main.py
 本项目仅供学习和研究使用，请遵守相关法律法规和B站用户协议。使用者应对自己的行为负责，作者不承担任何法律责任。
 
 ## 更新日志
+
+### v1.3.0 (2026-11-07)
+- ✅ **界面统一为纯白**：白色表面、深灰文字与浅灰分隔线；左侧导航改为图标行，
+  展开与收起共用固定行高；当前项只用一格浅灰圆角底
+- ✅ **标题栏恢复 `app.ico`**：左上角、窗口、托盘与安装包共用同一个图标
+- ✅ **空状态文字不再被遮挡**：移除装饰底纹，文字直接落在纯白面板上
+- ✅ **移除顶部装饰色带**：标题栏不再出现分色条
+- ✅ **随仓库分发界面字体与 OFL 许可证**：`resources/fonts/` 已解除 `.gitignore`
+  的资源目录通配忽略，源码、便携包与安装包均带齐字体
+- 🔧 **界面部件整理**：`ui_widgets.py` 只保留通用控件与按钮工厂
+- 🔧 **日志配色跟随界面**：切换主题后旧日志行按当前令牌重放
+- 🔧 **下拉框补上 ▾ 指示**：避免 QSS 边框三角形在 Qt 里糊成方块
+- 🔧 **任务计数不再被滚动条裁字**：右对齐计数行右侧留出 12px
+- 🔧 **验证脚本收尾改为正常退出**：避免 Qt 控件仍挂在应用上时的随机进程崩溃
+
+### v1.2.0 (2026-11-07)
+- 🔧 **日志配色跟随界面**：切换主题后旧日志行按当前令牌重放
+- 🔧 **下拉框补上 ▾ 指示**：避免 QSS 边框三角形在 Qt 里糊成方块
+- 🔧 **任务计数不再被滚动条裁字**：右对齐计数行右侧留出 12px
+- 🔧 **验证脚本收尾改为正常退出**：避免 Qt 控件仍挂在应用上时的随机进程崩溃
 
 ### v1.1.0 (2026-10-29)
 - ✅ **抖音图文（图集）可下载**：新增 `douyin` 原生后端。yt-dlp 的 `DouyinIE` 只认
@@ -605,6 +618,7 @@ python -m pdb main.py
 - [PySide6 (Qt)](https://www.qt.io/qt-for-python) - 原生桌面应用框架
 - [Requests](https://docs.python-requests.org/) - 人性化的HTTP库
 - [Loguru](https://github.com/Delgan/loguru) - 简单易用的日志库
+- [Saira](https://github.com/Omnibus-Type/Saira) - 字体（SIL OFL 1.1）
 
 ---
 

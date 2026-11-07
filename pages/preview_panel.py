@@ -21,6 +21,7 @@ from loguru import logger
 
 import jiudown_engine
 from config_manager import config_manager
+from ui_widgets import ActionButton, attach_panel, title_pair
 
 
 # ---------------------------------------------------------------- 本地流代理
@@ -114,40 +115,9 @@ class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 # ---------------------------------------------------------------- 播放条 UI
-# 播放控制条样式（仅作用于预览面板内控件）。
-# 控制条是常驻深色半透明媒体面（压在视频画面上，不随应用主题反色），
-# 因此轨道/时间文字使用固定的深色面对比色；品牌色（进度/按钮）跟随主题令牌。
-def _play_slider_qss() -> str:
-    from theme import C
-    return f"""
-QSlider {{ background: transparent; }}
-QSlider::groove:horizontal {{ height: 6px; background: {C['media_groove']}; border-radius: 3px; }}
-QSlider::sub-page:horizontal {{ background: {C['brand']}; border-radius: 3px; }}
-QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -4px 0;
-    background: #ffffff; border: 2px solid {C['brand']}; border-radius: 7px; }}
-QSlider::handle:horizontal:hover {{ background: #F2F2F7; }}
-QSlider::handle:horizontal:pressed {{ background: #D1D1D6; }}
-"""
-
-
-def _play_button_qss() -> str:
-    from theme import C
-    return f"""
-QPushButton {{ background: {C['brand']}; color: {C['on_brand']}; border: none;
-    border-radius: 999px; padding: 5px 16px; font-size: 12px; font-weight: 600; }}
-QPushButton:hover {{ background: {C['brand_dark']}; }}
-QPushButton:pressed {{ background: {C['brand_darker']}; }}
-QPushButton:disabled {{ background: {C['primary_disabled_bg']}; color: {C['primary_disabled_text']}; }}
-"""
-
-
-def _time_label_qss() -> str:
-    # 时间文字固定在深色控制条上：用浅色保证可读（原 #546b69 在深色条上仅 2.58:1）
-    from theme import C
-    return f"""
-QLabel {{ color: {C['media_text']}; font-size: 12px; font-family: Consolas, "Courier New", monospace;
-    min-width: 96px; }}
-"""
+# 播放控制条是常驻墨面（压在视频画面上，不随应用主题反色）。
+# 上色全部交给全局 QSS 按 objectName 命中（mediaBar / mediaPlay / mediaSlider /
+# mediaTime），只用与主题无关的媒体令牌，业务代码里不写控件级样式表。
 
 
 class PreviewPanel(QWidget):
@@ -182,32 +152,30 @@ class PreviewPanel(QWidget):
     def _build_ui(self) -> None:
         card = QFrame()
         card.setProperty("cssClass", "card")
+        attach_panel(card)
         outer = QVBoxLayout(card)
-        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setContentsMargins(16, 18, 16, 14)
         outer.setSpacing(10)
 
         # 标题行
         header = QHBoxLayout()
         header.setSpacing(8)
-        title = QLabel("视频预览")
-        title.setProperty("cssClass", "sectionTitle")
+        header.addWidget(title_pair("视频预览", "PREVIEW"))
+        header.addStretch(1)
         self.online_btn = QPushButton("在线预览")
-        self.online_btn.setProperty("small", True)
+        self.online_btn.setProperty("segment", True)
         self.online_btn.setCheckable(True)
         self.online_btn.setChecked(True)
         self.local_btn = QPushButton("本地预览")
-        self.local_btn.setProperty("small", True)
+        self.local_btn.setProperty("segment", True)
         self.local_btn.setCheckable(True)
         mode_group = QButtonGroup(self)
         mode_group.addButton(self.online_btn)
         mode_group.addButton(self.local_btn)
         self.online_btn.toggled.connect(lambda on: self._set_mode(0) if on else None)
         self.local_btn.toggled.connect(lambda on: self._set_mode(1) if on else None)
-        self.close_btn = QPushButton("关闭")
-        self.close_btn.setProperty("small", True)
+        self.close_btn = ActionButton("关闭", "ghost", small=True)
         self.close_btn.clicked.connect(self.close_requested)
-        header.addWidget(title)
-        header.addStretch(1)
         header.addWidget(self.online_btn)
         header.addWidget(self.local_btn)
         header.addWidget(self.close_btn)
@@ -216,27 +184,25 @@ class PreviewPanel(QWidget):
         # 工具行按模式二选一：在线=链接输入行，本地=文件选择行。
         # （原先两套控件同行的堆叠布局是在线预览时显得杂乱的主因）
         self.online_row = QWidget()
-        self.online_row.setStyleSheet("background: transparent;")
+        self.online_row.setProperty("cssClass", "plain")
         online_lay = QHBoxLayout(self.online_row)
         online_lay.setContentsMargins(0, 0, 0, 0)
         online_lay.setSpacing(8)
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("粘贴视频链接，回车在线预览")
         self.url_input.returnPressed.connect(self._load_online)
-        self.load_btn = QPushButton("加载")
-        self.load_btn.setProperty("small", True)
+        self.load_btn = ActionButton("加载", "secondary", small=True)
         self.load_btn.clicked.connect(self._load_online)
         online_lay.addWidget(self.url_input, 1)
         online_lay.addWidget(self.load_btn)
         outer.addWidget(self.online_row)
 
         self.local_row = QWidget()
-        self.local_row.setStyleSheet("background: transparent;")
+        self.local_row.setProperty("cssClass", "plain")
         local_lay = QHBoxLayout(self.local_row)
         local_lay.setContentsMargins(0, 0, 0, 0)
         local_lay.setSpacing(8)
-        self.open_btn = QPushButton("打开视频")
-        self.open_btn.setProperty("small", True)
+        self.open_btn = ActionButton("打开视频", "secondary", small=True)
         self.open_btn.clicked.connect(self._open_local)
         self.local_name_label = QLabel("未加载视频")
         self.local_name_label.setProperty("muted", True)
@@ -247,10 +213,11 @@ class PreviewPanel(QWidget):
 
         # 加载占位 / 播放器 两态
         self.stack = QStackedWidget()
-        self.stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        self.stack.setProperty("cssClass", "plain")
 
-        loading_page = QWidget()
-        loading_page.setStyleSheet("background: transparent;")
+        # 处理中：纯白底，文字清晰可读
+        loading_page = QFrame()
+        loading_page.setProperty("cssClass", "plain")
         load_lay = QVBoxLayout(loading_page)
         load_lay.setContentsMargins(0, 0, 0, 0)
         self.loading_label = QLabel("正在加载预览…")
@@ -262,7 +229,7 @@ class PreviewPanel(QWidget):
         self.stack.addWidget(loading_page)
 
         player_page = QWidget()
-        player_page.setStyleSheet("background: transparent;")
+        player_page.setProperty("cssClass", "plain")
         player_lay = QVBoxLayout(player_page)
         player_lay.setContentsMargins(0, 0, 0, 0)
         player_lay.setSpacing(8)
@@ -272,24 +239,22 @@ class PreviewPanel(QWidget):
         )
         player_lay.addWidget(self.video_widget, 1)
 
-        # 播放控制条：深色半透明底 + 圆角主色进度条 + 圆润播放按钮 + 等宽时间
+        # 播放控制条：常驻墨面 + 方头轨道 + 黄块播放键 + 等宽时间
         control_bar = QFrame()
-        control_bar.setStyleSheet(
-            "QFrame { background: rgba(28, 28, 30, 0.92); border-radius: 10px; }"
-        )
+        control_bar.setObjectName("mediaBar")
         control_row = QHBoxLayout(control_bar)
         control_row.setContentsMargins(12, 8, 12, 8)
         control_row.setSpacing(10)
         self.play_btn = QPushButton("播放")
-        self.play_btn.setStyleSheet(_play_button_qss())
+        self.play_btn.setObjectName("mediaPlay")
         self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.play_btn.clicked.connect(self._toggle_play)
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setRange(0, 0)
-        self.position_slider.setStyleSheet(_play_slider_qss())
+        self.position_slider.setObjectName("mediaSlider")
         self.position_slider.sliderMoved.connect(self._seek)
         self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setStyleSheet(_time_label_qss())
+        self.time_label.setObjectName("mediaTime")
         control_row.addWidget(self.play_btn)
         control_row.addWidget(self.position_slider, 1)
         control_row.addWidget(self.time_label)
@@ -317,9 +282,8 @@ class PreviewPanel(QWidget):
         self.setMinimumHeight(self.sizeHint().height())
 
     def refresh_theme(self) -> None:
-        """主题切换回调：重放播放条内联样式（控制条本体为常驻深色媒体面，不反色）"""
-        self.play_btn.setStyleSheet(_play_button_qss())
-        self.position_slider.setStyleSheet(_play_slider_qss())
+        """主题切换回调：媒体条由全局 QSS 按 objectName 上色，无需重放内联样式"""
+        self.video_widget.update()
 
     # ---------------------------------------------------------------- 模式
 

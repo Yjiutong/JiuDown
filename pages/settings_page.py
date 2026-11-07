@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QMessageBox, QProgressBar, QScrollArea, QSpinBox, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -17,6 +17,7 @@ from loguru import logger
 import ffmpeg_manager
 import jiudown_engine
 from config_manager import config_manager
+from ui_widgets import ActionButton, attach_panel, field_join, title_pair
 from pages.download_page import FORMATS
 from pages.home_page import HomePage
 from pages.log_page import LogPage
@@ -46,17 +47,16 @@ class SettingsPage(QWidget):
 
     # ---------------------------------------------------------------- 构建
 
-    def _section_card(self, title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
-        """创建设置分组卡片，返回 (卡片, 内容布局)"""
+    def _section_card(self, title: str, hint: str = "", en: str = "") -> tuple[QFrame, QVBoxLayout]:
+        """设置分组面板：标题与 1px 分隔线"""
         card = QFrame()
         card.setProperty("cssClass", "sectionCard")
+        attach_panel(card)
         vbox = QVBoxLayout(card)
-        vbox.setContentsMargins(18, 16, 18, 16)
+        vbox.setContentsMargins(18, 20, 18, 16)
         vbox.setSpacing(12)
 
-        title_label = QLabel(title)
-        title_label.setProperty("cssClass", "sectionTitle")
-        vbox.addWidget(title_label)
+        vbox.addWidget(title_pair(title, en))
         if hint:
             hint_label = QLabel(hint)
             hint_label.setProperty("cssClass", "sectionHint")
@@ -79,8 +79,8 @@ class SettingsPage(QWidget):
         return row
 
     def _browse_row(self, line_edit: QLineEdit, dialog_title: str,
-                    select_file: bool = False, file_filter: str = "") -> QPushButton:
-        button = QPushButton("浏览")
+                    select_file: bool = False, file_filter: str = "") -> ActionButton:
+        button = ActionButton("浏览", "secondary", small=True)
         if select_file:
             button.clicked.connect(
                 lambda: self._browse_file(line_edit, dialog_title, file_filter)
@@ -142,10 +142,9 @@ class SettingsPage(QWidget):
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
-        self._reset_button = QPushButton("重置为默认")
+        self._reset_button = ActionButton("重置为默认", "secondary")
         self._reset_button.clicked.connect(self._reset_settings)
-        self._save_button = QPushButton("保存设置")
-        self._save_button.setProperty("primary", True)
+        self._save_button = ActionButton("保存设置", "primary")
         self._save_button.clicked.connect(self._save_settings)
         footer.addStretch()
         footer.addWidget(self._reset_button)
@@ -172,26 +171,7 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
-        # 外观设置卡片
-        card, card_vbox = self._section_card("外观设置", "切换应用主题风格")
-        from theme import theme_manager, MODE_SYSTEM, MODE_LIGHT, MODE_DARK, MODE_LABELS
-        self.theme_mode = QComboBox()
-        self.theme_mode.addItem(MODE_LABELS[MODE_SYSTEM], MODE_SYSTEM)
-        self.theme_mode.addItem(MODE_LABELS[MODE_LIGHT], MODE_LIGHT)
-        self.theme_mode.addItem(MODE_LABELS[MODE_DARK], MODE_DARK)
-        # 设置当前选中项
-        current_mode = theme_manager.mode
-        for i in range(self.theme_mode.count()):
-            if self.theme_mode.itemData(i) == current_mode:
-                self.theme_mode.setCurrentIndex(i)
-                break
-        self.theme_mode.currentIndexChanged.connect(self._on_theme_mode_changed)
-        row = self._form_row("主题模式", self.theme_mode)
-        row.addStretch()
-        card_vbox.addLayout(row)
-        vbox.addWidget(card)
-
-        card, card_vbox = self._section_card("日志设置")
+        card, card_vbox = self._section_card("日志设置", "", "LOG")
         self.log_level = QComboBox()
         self.log_level.addItems(LOG_LEVELS)
         row = self._form_row("日志级别", self.log_level)
@@ -199,7 +179,8 @@ class SettingsPage(QWidget):
         card_vbox.addLayout(row)
         vbox.addWidget(card)
 
-        card, card_vbox = self._section_card("外部控制器端口", "核心程序对外提供的服务端口")
+        card, card_vbox = self._section_card(
+            "外部控制器端口", "核心程序对外提供的服务端口", "PORTS")
         self.grpc_port = QSpinBox()
         self.grpc_port.setRange(1024, 49151)
         row = self._form_row("gRPC 端口", self.grpc_port)
@@ -227,7 +208,7 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
-        card, card_vbox = self._section_card("目录与工具", "留空使用默认路径")
+        card, card_vbox = self._section_card("目录与工具", "留空使用默认路径", "PATHS")
         self.temp_dir_input = QLineEdit()
         row = self._form_row("临时目录", self.temp_dir_input)
         row.addWidget(self._browse_row(self.temp_dir_input, "选择临时目录"))
@@ -254,7 +235,7 @@ class SettingsPage(QWidget):
         self.ffmpeg_progress.setFixedWidth(120)
         self.ffmpeg_progress.setFixedHeight(6)
         self.ffmpeg_progress.setTextVisible(False)
-        self.ffmpeg_download_btn = QPushButton("下载完整版")
+        self.ffmpeg_download_btn = ActionButton("下载完整版", "secondary", small=True)
         self.ffmpeg_download_btn.clicked.connect(self._download_full_ffmpeg)
         ffmpeg_row.addWidget(self.ffmpeg_status_label, 1)
         ffmpeg_row.addWidget(self.ffmpeg_progress)
@@ -269,7 +250,8 @@ class SettingsPage(QWidget):
         # ---- JiuDown 下载引擎：双后端路由 + 版本与更新 ----
         card, card_vbox = self._section_card(
             "JiuDown 下载引擎",
-            "自带双后端：B 站走自研原生链路（快且可控），其余站点走 yt-dlp（1700+ 站点）"
+            "自带双后端：B 站走自研原生链路（快且可控），其余站点走 yt-dlp（1700+ 站点）",
+            "ENGINE",
         )
         self.engine_backend = QComboBox()
         for key, text in jiudown_engine.BACKEND_LABELS.items():
@@ -286,7 +268,7 @@ class SettingsPage(QWidget):
         self.engine_status_label = QLabel("检测中…")
         self.engine_status_label.setProperty("cssClass", "sectionHint")
         self.engine_status_label.setWordWrap(True)
-        self.engine_update_btn = QPushButton("更新引擎")
+        self.engine_update_btn = ActionButton("更新引擎", "secondary", small=True)
         self.engine_update_btn.clicked.connect(self._update_engine)
         engine_row.addWidget(self.engine_status_label, 1)
         engine_row.addWidget(self.engine_update_btn)
@@ -298,7 +280,7 @@ class SettingsPage(QWidget):
         ))
         vbox.addWidget(card)
 
-        card, card_vbox = self._section_card("下载限制")
+        card, card_vbox = self._section_card("下载限制", "", "LIMITS")
         self.max_tasks = QSpinBox()
         self.max_tasks.setRange(1, 5)
         row = self._form_row("最大同时下载任务数", self.max_tasks)
@@ -347,7 +329,7 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
-        card, card_vbox = self._section_card("代理设置")
+        card, card_vbox = self._section_card("代理设置", "", "PROXY")
         self.proxy_addr = QLineEdit()
         self.proxy_addr.setPlaceholderText("例如: http://127.0.0.1:1080")
         row = self._form_row("代理地址", self.proxy_addr)
@@ -355,7 +337,7 @@ class SettingsPage(QWidget):
         card_vbox.addLayout(row)
         vbox.addWidget(card)
 
-        card, card_vbox = self._section_card("下载策略")
+        card, card_vbox = self._section_card("下载策略", "", "STRATEGY")
         self.max_retry = QSpinBox()
         self.max_retry.setRange(1, 10)
         row = self._form_row("最大重试次数", self.max_retry)
@@ -397,7 +379,8 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
-        card, card_vbox = self._section_card("用户认证", "用于需要登录的站点（会员/私享/高画质门槛）")
+        card, card_vbox = self._section_card(
+            "用户认证", "用于需要登录的站点（会员/私享/高画质门槛）", "AUTH")
 
         # 首选方式：直接从浏览器读取已登录的 Cookie（无需手动复制粘贴）
         self.cookie_browser = QComboBox()
@@ -451,7 +434,8 @@ class SettingsPage(QWidget):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
-        card, card_vbox = self._section_card("内存缓存", "将下载数据暂存于内存，提升写入性能")
+        card, card_vbox = self._section_card(
+            "内存缓存", "将下载数据暂存于内存，提升写入性能", "CACHE")
         self.cache_in_ram = QCheckBox("启用内存缓存")
         row = self._form_row("缓存模式", self.cache_in_ram)
         row.addStretch()
@@ -464,7 +448,7 @@ class SettingsPage(QWidget):
         card_vbox.addLayout(row)
         vbox.addWidget(card)
 
-        card, card_vbox = self._section_card("安全设置")
+        card, card_vbox = self._section_card("安全设置", "", "SECURITY")
         self.insecure_skip_verify = QCheckBox("跳过 HTTPS 证书验证")
         row = self._form_row("证书验证", self.insecure_skip_verify)
         row.addStretch()
@@ -557,13 +541,15 @@ class SettingsPage(QWidget):
         native = "原生 B 站 ✓"
         ytdlp = f"yt-dlp {info['ytdlp_version'] or '未安装'}"
         label.setText(
-            f"JiuDown 引擎 {info['version']} · {native} · {ytdlp}"
+            field_join(f"JiuDown 引擎 {info['version']}", native, ytdlp)
         )
         self.engine_update_btn.setEnabled(True)
         if not info["ytdlp_ready"]:
             label.setText(
-                f"JiuDown 引擎 {info['version']} · 原生 B 站 ✓ · "
-                "yt-dlp 未安装（B 站以外站点不可用）"
+                field_join(
+                    f"JiuDown 引擎 {info['version']}", "原生 B 站 ✓",
+                    "yt-dlp 未安装（B 站以外站点不可用）",
+                )
             )
 
     def _update_engine(self) -> None:
@@ -719,12 +705,6 @@ class SettingsPage(QWidget):
                 "hide-nickname": self.hide_nickname.isChecked(),
             },
         }
-
-    def _on_theme_mode_changed(self, index: int) -> None:
-        """主题模式切换回调"""
-        from theme import theme_manager
-        mode = self.theme_mode.itemData(index)
-        theme_manager.set_mode(mode, persist=True)
 
     def _save_settings(self) -> None:
         try:

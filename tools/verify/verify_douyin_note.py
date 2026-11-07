@@ -477,4 +477,7 @@ except Exception as e:
 
 print(f"\n===== {len(PASS)} passed, {len(FAIL)} failed =====")
 sys.stdout.flush()
-os._exit(0 if not FAIL else 1)
+# 这里不能硬退出：卡片与预览面板还挂在 QApplication 上时调用 os._exit，进程会在
+# DLL 卸载阶段随机 access violation（0xC0000005；实测本版 4/4、改版前的 HEAD 7/12，
+# 说明是脚本自身的退出方式而非界面改动引入）。正常退出会先析构 Qt，实测 ~7s 干净收尾。
+sys.exit(0 if not FAIL else 1)

@@ -211,7 +211,7 @@ def main() -> None:
     app.setApplicationName("JiuDown Desktop")
     app.setStyle("Fusion")
 
-    # 应用主题：固定浅色（产品决策：不跟随系统、不提供切换，见 theme.py 说明）
+    # 应用主题：固定纯白
     theme_manager.set_mode(load_mode(), persist=False)
 
     from main_window import MainWindow

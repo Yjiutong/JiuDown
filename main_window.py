@@ -1,9 +1,10 @@
 """
 主窗口
 侧边导航 + 页面栈的桌面应用框架
-一体化标题栏：隐藏原生标题栏，窗口标识与控制由应用自身 chrome 承担
+一体化标题栏：隐藏原生标题栏，窗口标识与控制由应用自身承担
 （拖动 / 双击最大化 / 边缘缩放 / 自定义最大化 / Win32 阴影恢复）
-图标系统：iPhone 设计美学（squircle 容器 + SF 风格图形），详见下方图标系统节
+纯白界面：标题栏与侧边导航同色，当前项一格圆角浅灰底
+标识：直接用 resources/app.ico，窗口与托盘同源
 支持系统托盘：有关闭时未完成任务 → 隐藏到托盘后台继续下载，完成后自动退出
 """
 
@@ -15,26 +16,36 @@ from PySide6.QtCore import (
     Property, Qt, QTimer, QRect, QRectF, QPoint, QSize,
 )
 from PySide6.QtGui import (
-    QColor, QCloseEvent, QGuiApplication, QIcon, QPainter,
-    QPen, QPixmap, QCursor, QTransform, QRegion,
+    QBrush, QColor, QCloseEvent, QFont, QFontMetrics, QGuiApplication, QIcon,
+    QPainter, QPen, QPixmap, QCursor, QTransform, QRegion,
 )
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
-    QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 import jiudown_engine
+import theme
 from download_manager import download_manager
+from ui_widgets import (
+    Backdrop, install_combo_arrows, set_styled,
+)
 from pages.download_page import DownloadPage
 from pages.settings_page import SettingsPage
 from theme import APP_TITLE, APP_VERSION, C
 
+# 导航项：中文标题 / 说明 / 页面 / 页面英文小标题；图标见 NAV_ICONS
+# 导航图标种类：程序化线性绘制，不用字体符号（缺字形会变豆腐块）
 NAV_ITEMS = [
-    ("视频下载", "任意站点视频下载与任务管理", DownloadPage),
-    ("设置", "状态总览、运行日志与应用配置", SettingsPage),
+    ("视频下载", "任意站点视频下载与任务管理", DownloadPage, "DOWNLOADS"),
+    ("设置", "状态总览、运行日志与应用配置", SettingsPage, "SETTINGS"),
 ]
 
 ACTIVE_STATUSES = ("queued", "preparing", "downloading", "merging")
+
+NAV_ICONS = {"视频下载": "download", "设置": "tune"}
+NAV_ICON = 20        # 导航图标画布边长（逻辑像素）
+NAV_ROW_H = 40       # 导航行高：展开与收起共用，两态几何完全一致
 
 SIDEBAR_WIDE = 208
 SIDEBAR_NARROW = 64
@@ -62,8 +73,7 @@ _CAPTION_TOOLTIPS = {
 
 # =====================================================================
 # 应用图标（resources/app.ico）
-# 设计语言：苹果蓝渐变 squircle + 白色下载箭头（arrow.down.to.line）
-# 由 TEMP/make_ico.py 生成：多尺寸（16-256）独立矢量渲染，PNG 条目 ICO
+# 标题栏、窗口、托盘共用 resources/app.ico
 # =====================================================================
 
 
@@ -86,11 +96,7 @@ def _app_icon() -> QIcon:
 
 
 class _FoldButton(QPushButton):
-    """侧边栏折叠开关：单色细线双雪佛龙（«/»）+ 180° 旋转动画平滑过渡
-
-    无容器底、颜色随主题（sidebar_text）；« 展开态，收起态 » 由旋转得到。
-    图标绕画布中心旋转（QTransform 中心平移），每帧重绘并 setIcon。
-    """
+    """侧边栏折叠开关：灰色双雪佛龙 + 180° 旋转动画"""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -104,9 +110,9 @@ class _FoldButton(QPushButton):
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(C["sidebar_text"]), 4.0)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen = QPen(QColor(C["chrome_text"]), 4.0)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPolyline([QPointF(20, 16), QPointF(12, 24), QPointF(20, 32)])
@@ -137,13 +143,78 @@ class _FoldButton(QPushButton):
     angle = Property(float, _get_angle, _set_angle)
 
 
-# macOS 红绿灯配色（图标化圆点，不随主题改色，属苹果标志性视觉）
-class _CaptionButton(QPushButton):
-    """标题栏 Windows 风格窗口控制按钮（最小化 / 最大化·还原 / 关闭）
+def _nav_icon(kind: str, color: QColor) -> QIcon:
+    """导航线性图标：24 网格描边，颜色取 chrome 令牌
 
-    线性字形（— / □ / ⧉ / ×）居中绘制，颜色取自主题令牌；
-    悬停灰底、按下深灰底；关闭按钮悬停红底白叉（Windows 惯例）。
-    尺寸 46 x 标题栏高（Windows caption 按钮惯例）。
+    程序化绘制（不引图标库、不用字体符号），2x 画布保证高 DPI 下不糊；
+    切主题后由 NavItem.refresh_theme() 按新色重建。
+    """
+    size = 24
+    pm = QPixmap(size * 2, size * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color, 1.7)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    cx = size / 2
+    if kind == "download":
+        # 箭头落进托盘：竖线 + 箭头 + 底部凹槽
+        painter.drawLine(QPointF(cx, 4.5), QPointF(cx, 14.0))
+        painter.drawPolyline([QPointF(cx - 4, 10.0), QPointF(cx, 14.0),
+                              QPointF(cx + 4, 10.0)])
+        painter.drawPolyline([QPointF(4.5, 16.0), QPointF(4.5, 19.5),
+                              QPointF(19.5, 19.5), QPointF(19.5, 16.0)])
+    else:  # tune：两条滑杆 + 实心旋钮
+        painter.drawLine(QPointF(4.5, 9.0), QPointF(19.5, 9.0))
+        painter.drawLine(QPointF(4.5, 15.0), QPointF(19.5, 15.0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(color))
+        painter.drawEllipse(QPointF(9.5, 9.0), 2.4, 2.4)
+        painter.drawEllipse(QPointF(15.5, 15.0), 2.4, 2.4)
+    painter.end()
+    return QIcon(pm)
+
+
+class NavItem(QPushButton):
+    """侧边导航项：线性图标 + 单行文字，当前项用浅灰圆角底
+
+    展开态和收起态共用固定行高与图标盒，仅隐藏文字。
+    """
+
+    def __init__(self, cn: str, icon_kind: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._icon_kind = icon_kind
+        self._label = cn
+        self.setProperty("nav", True)
+        self.setProperty("navText", cn)
+        self.setText(cn)
+        self.setToolTip(cn)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(NAV_ROW_H)
+        self.setIconSize(QSize(NAV_ICON, NAV_ICON))
+        self.refresh_theme()
+
+    def refresh_theme(self) -> None:
+        self.setIcon(_nav_icon(self._icon_kind, QColor(C["chrome_text"])))
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """两态共用固定行高；收起时只隐藏文字，图标盒不移动。"""
+        self.setText("" if collapsed else self._label)
+        self.setProperty("collapsed", collapsed)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+
+class _CaptionButton(QPushButton):
+    """标题栏窗口控制按钮（最小化 / 最大化·还原 / 关闭）
+
+    线性字形居中绘制；悬停用浅灰底，关闭按钮指向时用浅红底。
     """
 
     def __init__(self, role: str, parent: QWidget | None = None):
@@ -168,14 +239,14 @@ class _CaptionButton(QPushButton):
         """当前状态底色；None = 透明（透出标题栏背景）"""
         if self._role == "close":
             if self.isDown():
-                return QColor(C["titlebar_close_pressed"])
+                return QColor(C["panel"])
             if self.underMouse():
-                return QColor(C["titlebar_close_hover"])
+                return QColor(C["chrome_text"])
             return None
         if self.isDown():
-            return QColor(C["titlebar_ctrl_pressed"])
+            return QColor(C["chrome_press"])
         if self.underMouse():
-            return QColor(C["titlebar_ctrl_hover"])
+            return QColor(C["chrome_hover"])
         return None
 
     def paintEvent(self, event) -> None:
@@ -186,11 +257,12 @@ class _CaptionButton(QPushButton):
             p.fillRect(self.rect(), bg)
         cx, cy = self.width() / 2, self.height() / 2
         is_close = self._role == "close"
-        color = QColor("#ffffff") if (is_close and self.underMouse()) \
-            else QColor(C["titlebar_icon"])
+        inverted = is_close and (self.underMouse() or self.isDown())
+        color = QColor(C["chrome"]) if inverted \
+            else QColor(C["chrome_text"])
         pen = QPen(color, 1.2)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         if self._role == "minimize":
@@ -212,9 +284,8 @@ class _CaptionButton(QPushButton):
 class _TitleBar(QWidget):
     """一体化标题栏：去掉原生标题栏后，由应用自身承担窗口标识与窗口控制
 
-    - 左段：与侧边栏同色同宽（视觉连成一体），承载应用图标 + 名称；
-      宽度跟随侧边栏（含折叠动画逐帧同步），支持拖动 / 双击最大化 / 右键系统菜单
-    - 右段：与内容区同色，右端放置最小化 / 最大化 / 关闭按钮
+    - 左段：与侧边栏同色同宽，承载应用图标与标题；宽度跟随折叠动画逐帧同步
+    - 右段：右端放置最小化 / 最大化 / 关闭按钮
     """
 
     def __init__(self, window: "MainWindow"):
@@ -230,12 +301,12 @@ class _TitleBar(QWidget):
         self._left = QWidget()
         self._left.setObjectName("titleBarLeft")
         self._left_lay = QHBoxLayout(self._left)
-        # 左边距 24：图标中心落在 x=32，与侧边栏开关/导航内容线对齐；
-        # 收起态（64px 段）下 24+16/2 也恰好居中于 32，两态图标零位移
-        self._left_lay.setContentsMargins(24, 0, 10, 0)
+        # 左对齐：图标中心落在 x=24，与收起态导航中心一致，两态图标零位移
+        self._left_lay.setContentsMargins(12, 0, 8, 0)
         self._left_lay.setSpacing(8)
+        # 标识就是 app.ico 本身
         self._icon_label = QLabel()
-        self._icon_label.setPixmap(_app_icon().pixmap(16, 16))
+        self._icon_label.setPixmap(_app_icon().pixmap(20, 20))
         self._title_label = QLabel(APP_TITLE)
         self._title_label.setObjectName("titlebarTitle")
         self._left_lay.addWidget(self._icon_label)
@@ -270,11 +341,7 @@ class _TitleBar(QWidget):
         self._left.setFixedWidth(width)
 
     def set_collapsed(self, collapsed: bool) -> None:
-        """侧边栏收起时隐藏标题文字。
-
-        图标位置两态一致（均距左 24px，收起态恰好居中于 64px 段），
-        无需切换边距/弹簧，避免动画期间图标位置跳变。
-        """
+        """纯图标 rail：隐藏文字，只留左对齐的应用图标（位置不变）"""
         self._title_label.setVisible(not collapsed)
 
     def refresh_theme(self) -> None:
@@ -423,8 +490,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- UI
 
     def _build_ui(self) -> None:
-        root = QWidget()
-        root.setObjectName("contentRoot")
+        # 页面底：纯白
+        root = Backdrop()
         self.setCentralWidget(root)
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -445,45 +512,25 @@ class MainWindow(QMainWindow):
         sidebar.setMaximumWidth(SIDEBAR_WIDE)
         self._sidebar = sidebar
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(16, 24, 16, 18)
-        side_layout.setSpacing(6)
+        side_layout.setContentsMargins(12, 12, 12, 12)
+        side_layout.setSpacing(4)
 
-        logo_row = QHBoxLayout()
-        logo_row.setSpacing(10)
-        # 折叠/展开开关（程序化绘制箭头图标 + 旋转动画，避免字体符号渲染为空）
-        # 36px 宽与收起态导航按钮同宽，图标中心恒为 x=32（与导航图标线对齐）
         self._toggle_btn = _FoldButton()
         self._toggle_btn.setObjectName("sidebarToggle")
-        self._toggle_btn.setFixedSize(36, 28)
+        self._toggle_btn.setFixedSize(40, 40)
         self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._toggle_btn.setToolTip("折叠侧边栏")
-        self._toggle_btn.clicked.connect(self._toggle_sidebar)
-        logo_row.addWidget(self._toggle_btn)
-        # 品牌区（收起时隐藏；收起后按钮撑满内容区实现水平居中）
-        self._brand = QWidget()
-        brand_lay = QVBoxLayout(self._brand)
-        brand_lay.setContentsMargins(0, 0, 0, 0)
-        brand_lay.setSpacing(0)
-        title_label = QLabel(APP_TITLE)
-        title_label.setObjectName("sidebarTitle")
-        sub_label = QLabel("全站视频下载工具")
-        sub_label.setObjectName("sidebarSub")
-        brand_lay.addWidget(title_label)
-        brand_lay.addWidget(sub_label)
-        logo_row.addWidget(self._brand)
-        logo_row.addStretch()
-        side_layout.addLayout(logo_row)
+        self._toggle_btn.setToolTip("切换侧边栏")
+        # 左对齐：图标中心落在 x=32，与导航项图标列对齐（Codex 风格）
+        side_layout.addWidget(self._toggle_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         self._divider = QFrame()
         self._divider.setObjectName("sidebarDivider")
-        side_layout.addWidget(self._divider)
+        # 短分隔线，左对齐，不与右侧边线重叠
+        self._divider.setFixedWidth(SIDEBAR_NARROW - 24)
+        side_layout.addWidget(self._divider, 0, Qt.AlignmentFlag.AlignLeft)
 
-        for index, (name, _desc, _page_cls) in enumerate(NAV_ITEMS):
-            button = QPushButton(name)
-            button.setProperty("nav", True)
-            button.setProperty("navText", name)
-            button.setCheckable(True)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        for index, (name, _desc, _page_cls, _en) in enumerate(NAV_ITEMS):
+            button = NavItem(name, NAV_ICONS[name])
             button.clicked.connect(
                 lambda _checked=False, i=index: self._switch_page(i)
             )
@@ -493,6 +540,7 @@ class MainWindow(QMainWindow):
         side_layout.addStretch()
         self._version_label = QLabel(f"v{APP_VERSION}")
         self._version_label.setObjectName("sidebarVersion")
+        self._version_label.setVisible(True)
         side_layout.addWidget(self._version_label)
         body_row.addWidget(sidebar)
 
@@ -505,41 +553,51 @@ class MainWindow(QMainWindow):
         self._sidebar_anim.addAnimation(self._sidebar_anim_min)
         self._sidebar_anim.addAnimation(self._sidebar_anim_max)
         for anim in (self._sidebar_anim_min, self._sidebar_anim_max):
-            anim.setDuration(260)
-            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            anim.setDuration(theme.DUR_EDGE)
+            anim.setEasingCurve(QEasingCurve.Type.InOutExpo)
         self._sidebar_anim.finished.connect(self._on_sidebar_anim_finished)
         # 开关图标旋转动画（与宽度动画同时长同曲线，两动画感知为一个动作）
         self._fold_anim = QPropertyAnimation(self._toggle_btn, b"angle", self)
-        self._fold_anim.setDuration(260)
-        self._fold_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._fold_anim.setDuration(theme.DUR_EDGE)
+        self._fold_anim.setEasingCurve(QEasingCurve.Type.InOutExpo)
         self._collapsed = False
-        self._apply_sidebar_state(False)
+        self._apply_sidebar_state(False, animate=False)
 
         # ---- 右侧内容区 ----
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(32, 18, 32, 22)
+        content_layout.setContentsMargins(28, 16, 28, 20)
         content_layout.setSpacing(12)
 
         header_row = QHBoxLayout()
         header_row.setSpacing(12)
         header_text = QVBoxLayout()
         header_text.setSpacing(0)
+        self._page_eyebrow_label = QLabel("")
+        self._page_eyebrow_label.setObjectName("pageEyebrow")
+        set_styled(self._page_eyebrow_label, 600, 14)
         self._page_title_label = QLabel("")
         self._page_title_label.setObjectName("pageTitle")
+        set_styled(self._page_title_label, 800)
         self._page_subtitle_label = QLabel("")
         self._page_subtitle_label.setObjectName("pageSubtitle")
+        header_text.addWidget(self._page_eyebrow_label)
         header_text.addWidget(self._page_title_label)
         header_text.addWidget(self._page_subtitle_label)
         self._status_pill = QLabel("引擎: 检测中")
         self._status_pill.setObjectName("statusPill")
+        set_styled(self._status_pill)
+        # 状态标签不跟着页头一起拉伸：固定成一个小块，靠顶对齐
+        self._status_pill.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         header_row.addLayout(header_text)
         header_row.addStretch()
-        header_row.addWidget(self._status_pill)
+        header_row.addWidget(self._status_pill, 0, Qt.AlignmentFlag.AlignTop)
         content_layout.addLayout(header_row)
 
         self._stack = QStackedWidget()
-        for _name, _desc, page_cls in NAV_ITEMS:
+        for _name, _desc, page_cls, _en in NAV_ITEMS:
             self._stack.addWidget(page_cls())
         content_layout.addWidget(self._stack, 1)
         body_row.addWidget(content, 1)
@@ -550,6 +608,7 @@ class MainWindow(QMainWindow):
         # 去除所有 QComboBox 下拉列表的原生 frame，避免 QSS 圆角下出现黑边
         for combo in self.findChildren(QComboBox):
             combo.view().setFrameShape(QFrame.Shape.NoFrame)
+        install_combo_arrows(QApplication.instance())
 
         # 标题栏左段初始与侧边栏同宽（后续由 sidebar Resize 事件逐帧同步）
         self._title_bar.set_left_width(SIDEBAR_WIDE)
@@ -561,9 +620,9 @@ class MainWindow(QMainWindow):
         target = SIDEBAR_NARROW if self._collapsed else SIDEBAR_WIDE
         start = self._sidebar.width()
 
-        if self._collapsed:
-            # 折叠：文字立即消失，再平滑收缩宽度（避免窄栏挤压文字）
-            self._apply_sidebar_state(True)
+        # 收起：先立即隐藏文字，再让宽度收缩，文字不会在窄栏里被挤压换行
+        # 展开：先让宽度展开，动画结束后再显示文字
+        self._apply_sidebar_state(self._collapsed, animate=True)
 
         # 宽度动画：min/max 从当前宽度同步插值到目标值（逐帧精确宽度）
         self._sidebar_anim.stop()
@@ -579,37 +638,46 @@ class MainWindow(QMainWindow):
         self._fold_anim.start()
 
     def _on_sidebar_anim_finished(self) -> None:
-        # 动画结束时属性已插值到目标值，此处显式落定 min/max，锁定最终宽度
-        if self._collapsed:
-            self._sidebar.setMinimumWidth(SIDEBAR_NARROW)
-            self._sidebar.setMaximumWidth(SIDEBAR_NARROW)
-        else:
-            self._sidebar.setMinimumWidth(SIDEBAR_WIDE)
-            self._sidebar.setMaximumWidth(SIDEBAR_WIDE)
-            self._apply_sidebar_state(False)
+        width = SIDEBAR_NARROW if self._collapsed else SIDEBAR_WIDE
+        self._sidebar.setMinimumWidth(width)
+        self._sidebar.setMaximumWidth(width)
+        # 展开动画结束后才显示文字，避免文字在窄栏里被挤压
+        if not self._collapsed:
+            for button in self._nav_buttons:
+                button.set_collapsed(False)
 
-    def _apply_sidebar_state(self, collapsed: bool) -> None:
+    def _apply_sidebar_state(self, collapsed: bool, animate: bool = True) -> None:
         """切换品牌区/版本号/导航文字的显示，导航按钮收起时仅剩图标"""
         if hasattr(self, "_title_bar"):
             self._title_bar.set_collapsed(collapsed)
         self._toggle_btn.setToolTip("展开侧边栏" if collapsed else "折叠侧边栏")
-        self._brand.setVisible(not collapsed)
         self._divider.setVisible(not collapsed)
         self._version_label.setVisible(not collapsed)
+        # 折叠按钮在窄栏内居中：图标盒 40px 居中于 64px 宽，中心 x=32
+        self._toggle_btn.setContentsMargins(
+            12 if collapsed else 4, 0, 0, 0
+        )
         for button in self._nav_buttons:
-            text = button.property("navText") or ""
-            # 收起态以导航名首字占位（纯文字侧边栏，无图标）
-            button.setText(text[:1] if collapsed else text)
-            button.setToolTip(text if collapsed else "")
-            button.setProperty("collapsed", collapsed)
-            button.style().unpolish(button)
-            button.style().polish(button)
+            button.setToolTip(button.property("navText") or "")
+            if animate:
+                # 收起时立即隐藏文字；展开时由动画结束回调显示
+                if collapsed:
+                    button.set_collapsed(True)
+            else:
+                button.set_collapsed(collapsed)
+        if not animate:
+            width = SIDEBAR_NARROW if collapsed else SIDEBAR_WIDE
+            self._sidebar.setMinimumWidth(width)
+            self._sidebar.setMaximumWidth(width)
+            self._fold_anim.stop()
+            self._toggle_btn.angle = 180.0 if collapsed else 0.0
 
     def _switch_page(self, index: int) -> None:
         for i, button in enumerate(self._nav_buttons):
             button.setChecked(i == index)
         self._stack.setCurrentIndex(index)
-        name, desc, _cls = NAV_ITEMS[index]
+        name, desc, _cls, en = NAV_ITEMS[index]
+        self._page_eyebrow_label.setText(f"// {en}")
         self._page_title_label.setText(name)
         self._page_subtitle_label.setText(desc)
 
@@ -618,11 +686,11 @@ class MainWindow(QMainWindow):
         active = len(download_manager._active)
         info = jiudown_engine.engine.info()
         if active:
-            text, css_class = f"● 下载中 {active}", "badgeBlue"
+            text, css_class = f"下载中 {active}", "badgeBlue"
         elif not info["ytdlp_ready"]:
-            text, css_class = "● 部分就绪", "badgeOrange"
+            text, css_class = "部分就绪", "badgeOrange"
         else:
-            text, css_class = "● 就绪", "badgeGreen"
+            text, css_class = "就绪", "badgeGreen"
         self._status_pill.setText(text)
         self._status_pill.setProperty("cssClass", css_class)
         self._status_pill.style().unpolish(self._status_pill)
@@ -876,30 +944,8 @@ class MainWindow(QMainWindow):
             pass  # 老系统 / 关闭 DWM 合成时静默降级：仅失去阴影
 
     def _apply_window_mask(self) -> None:
-        """无边框窗口的苹果式圆角遮罩：裁掉四角，露出窗外阴影/桌面。
-
-        最大化（含系统原生与自定义）时整窗贴合工作区，圆角无意义且会露缝，
-        直接清除遮罩恢复矩形。
-        """
-        if self._is_maximized or self.isMaximized():
-            self.clearMask()
-            return
-        r = 11
-        w, h = self.width(), self.height()
-        if w <= 0 or h <= 0:
-            return
-        region = QRegion(QRect(r, 0, w - 2 * r, h))            # 中部（去两竖边角）
-        region += QRegion(QRect(0, r, w, h - 2 * r))            # 中部（去两横边角）
-        # 四角：r×r 方块 ∩ 2r×2r 椭圆 = 四分圆
-        region += QRegion(QRect(0, 0, r, r)) & QRegion(
-            QRect(0, 0, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        region += QRegion(QRect(w - r, 0, r, r)) & QRegion(
-            QRect(w - 2 * r, 0, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        region += QRegion(QRect(0, h - r, r, r)) & QRegion(
-            QRect(0, h - 2 * r, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        region += QRegion(QRect(w - r, h - r, r, r)) & QRegion(
-            QRect(w - 2 * r, h - 2 * r, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        self.setMask(region)
+        """整窗保持矩形"""
+        self.clearMask()
 
     def refresh_theme(self) -> None:
         """主题切换回调：重放内联动态颜色（状态徽章 + 标题栏控制按钮）"""

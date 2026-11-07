@@ -26,6 +26,10 @@ import ffmpeg_manager
 import jiudown_engine
 from config_manager import config_manager
 from download_manager import download_manager, download_log_manager
+from ui_widgets import (
+    ActionButton, attach_panel, attach_record, field, field_join,
+    flag, hug, inline, number_tag, set_styled, state_box, title_pair,
+)
 from pages.preview_panel import PreviewPanel
 from theme import C
 # 画质/格式档位由引擎统一定义，避免 UI 与引擎各写一份导致漂移
@@ -80,18 +84,18 @@ def _start_resolution(url: str) -> None:
 
 
 STATUS_BADGE = {
+    # 状态只用这套写法：实线框 = 生效，虚线框 = 还在后台排队，黄块 = 要看一眼
     "queued": ("gray", "等待中"),
-    "preparing": ("orange", "准备中"),
+    "preparing": ("cyan", "准备中"),
     "downloading": ("blue", "下载中"),
-    "merging": ("cyan", "合并中"),
+    "merging": ("green", "合并中"),
     "completed": ("green", "已完成"),
-    "failed": ("red", "失败"),
+    "failed": ("orange", "失败"),
     "cancelled": ("gray", "已取消"),
 }
 
 PROGRESS_COLOR = {
     "completed": "green",
-    "failed": "red",
     "merging": "orange",
 }
 
@@ -172,11 +176,10 @@ class UrlInputEdit(QTextEdit):
 
 
 class _DeleteIconButton(QPushButton):
-    """自绘删除图标按钮（iPhone 美学）：圆头 × 双笔触 + 悬停/按下红底
+    """自绘删除图标按钮：方头 × 双笔触，指向时用浅红底
 
     不用文本 "×"：部分系统字体缺该字形会渲染成豆腐块；自绘同时获得
-    与标题栏按钮一致的悬停反馈。笔触在 48 画布上绘制（DPR=2），24px
-    显示尺寸下保持清晰。
+    与标题栏按钮一致的悬停反馈。红色只在这一个动作上出现。
     """
 
     def __init__(self, parent=None):
@@ -210,26 +213,15 @@ class _DeleteIconButton(QPushButton):
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        # 底色：常态浅灰（给出可点击的按钮形态）→ 悬停淡红 → 按下加深
-        if self._pressed:
-            bg = QColor(C["red"])
-            bg.setAlphaF(0.18)
-        elif self._hover:
-            bg = QColor(C["red"])
-            bg.setAlphaF(0.10)
+        # 底色：常态透明（只剩一个字形）→ 指向时红块擦满
+        if self._hover or self._pressed:
+            p.fillRect(self.rect(), QColor(C["red"]))
+            glyph = C["panel"]
         else:
-            bg = QColor(C["gray_bg"])
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(QRectF(0, 0, w, h), w * 0.30, w * 0.30)
-        # 字形：圆头 ×，按按钮实际尺寸绘制（此前用 48 画布坐标未缩放，被裁成一道斜杠）
-        glyph = C["red_dark"] if self._pressed else (
-            C["red"] if self._hover else C["text_muted"]
-        )
+            glyph = C["ink2"]
         pen = QPen(QColor(glyph), max(2.0, w * 0.095))
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         inset = w * 0.31
@@ -257,7 +249,8 @@ class TagCard(QFrame):
 
     def __init__(self, url: str, quality: str, file_format: str, parent=None):
         super().__init__(parent)
-        self.setProperty("cssClass", "card")
+        # 链接是一条待办记录：细线分隔 + 左侧当前位置条，不是带阴影的卡片
+        self.setProperty("cssClass", "record")
         # 不设 tooltip：悬停标签卡应弹出低清预览，提示气泡会盖住预览画面
         self.url = url
         self.title = ""
@@ -272,11 +265,13 @@ class TagCard(QFrame):
         self._hover_timer: QTimer | None = None
 
         vbox = QVBoxLayout(self)
-        vbox.setContentsMargins(14, 8, 14, 8)
+        vbox.setContentsMargins(12, 8, 12, 8)
         vbox.setSpacing(4)
+        attach_record(self, vbox)
 
         row = QHBoxLayout()
         row.setSpacing(8)
+        self.no_tag = number_tag("No.000")
         self.title_label = QLabel(url)
         self.title_label.setProperty("cssClass", "taskTitle")
         # 不设 tooltip：悬停标签卡要弹低清预览，气泡会盖住画面；完整标题看右键「查看链接」
@@ -285,8 +280,11 @@ class TagCard(QFrame):
         self.format_badge.setProperty("cssClass", "badgeCyan")
         self.quality_badge = QLabel(quality)
         self.quality_badge.setProperty("cssClass", "badgeGray")
+        inline(set_styled(self.format_badge))
+        inline(set_styled(self.quality_badge))
         delete_btn = _DeleteIconButton()
         delete_btn.clicked.connect(lambda: self.delete_requested.emit(self.url))
+        row.addWidget(self.no_tag)
         row.addWidget(self.title_label, 1)
         row.addWidget(self.format_badge)
         row.addWidget(self.quality_badge)
@@ -296,9 +294,14 @@ class TagCard(QFrame):
         self.detail_label = QLabel(PARSING_HINT)
         self.detail_label.setProperty("cssClass", "taskMeta")
         self.detail_label.setWordWrap(True)
+        self.detail_label.setIndent(24)   # 与编号标签的左缘对齐
         vbox.addWidget(self.detail_label)
 
     # ---------------------------------------------------------------- 状态
+
+    def set_index(self, index: int) -> None:
+        """记录行的编号（真实序号，不是装饰）"""
+        self.no_tag.setText(f"No.{index:03d}")
 
     def set_config(self, quality: str, file_format: str) -> None:
         self.quality = quality
@@ -538,19 +541,21 @@ class TaskCard(QFrame):
 
     def __init__(self, task_id: str, parent=None):
         super().__init__(parent)
-        self.setProperty("cssClass", "card")
+        self.setProperty("cssClass", "record")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("点击预览该视频")
         self.task_id = task_id
         self.levels: list[dict] = []
 
         vbox = QVBoxLayout(self)
-        vbox.setContentsMargins(16, 12, 16, 12)
+        vbox.setContentsMargins(12, 10, 12, 10)
         vbox.setSpacing(8)
+        attach_record(self, vbox)
 
         # 第一行：标题 + 格式下拉 + 质量下拉 + 徽章
         top = QHBoxLayout()
         top.setSpacing(8)
+        self.no_tag = number_tag("No.000")
         self.title_label = QLabel("等待解析标题...")
         self.title_label.setProperty("cssClass", "taskTitle")
         self.title_label.setWordWrap(True)
@@ -564,8 +569,10 @@ class TaskCard(QFrame):
         self.quality_combo.setMaximumWidth(170)
         self.badge_label = QLabel("等待中")
         self.badge_label.setProperty("cssClass", "badge")
+        inline(set_styled(self.badge_label))
         self.format_combo.currentIndexChanged.connect(self._on_format_changed)
         self.quality_combo.currentIndexChanged.connect(self._emit_config)
+        top.addWidget(self.no_tag)
         top.addWidget(self.title_label, 1)
         top.addWidget(self.format_combo)
         top.addWidget(self.quality_combo)
@@ -585,21 +592,23 @@ class TaskCard(QFrame):
         self.detail_label = QLabel("")
         self.detail_label.setProperty("cssClass", "taskDetail")
         self.detail_label.setWordWrap(True)
-        self.retry_button = QPushButton("重试")
-        self.retry_button.setProperty("small", True)
-        self.delete_button = QPushButton("删除")
-        self.delete_button.setProperty("small", True)
-        self.delete_button.setProperty("danger", True)
-        self.preview_button = QPushButton("预览")
-        self.preview_button.setProperty("small", True)
-        self.open_button = QPushButton("打开文件夹")
-        self.open_button.setProperty("small", True)
+        self.retry_button = ActionButton("重试", "secondary", small=True)
+        self.delete_button = ActionButton("删除", "danger", small=True)
+        self.preview_button = ActionButton("预览", "secondary", small=True)
+        self.open_button = ActionButton("打开文件夹", "secondary", small=True)
         bottom.addWidget(self.detail_label, 1)
+        # 详情被 hug() 限宽后吃不下全部富余空间：这里补一根伸缩条，
+        # 否则 QBoxLayout 会把多余的宽度摊进行间，按钮之间出现大空隙
+        bottom.addStretch(1)
         bottom.addWidget(self.retry_button)
         bottom.addWidget(self.delete_button)
         bottom.addWidget(self.preview_button)
         bottom.addWidget(self.open_button)
         vbox.addLayout(bottom)
+
+    def set_index(self, index: int) -> None:
+        """记录行的编号（队列里的真实序号）"""
+        self.no_tag.setText(f"No.{index:03d}")
 
     def _on_format_changed(self, *_args) -> None:
         """格式切换：mp3 时质量下拉切换为声道选择（默认双声道）"""
@@ -682,8 +691,10 @@ class TaskCard(QFrame):
             meta_bits.append(download_manager.format_duration(task["duration"]))
         if int(task.get("playlist_count") or 0) > 1:
             meta_bits.append(f"合集 {task['playlist_count']} 项")
-        meta = " · ".join(meta_bits)
+        meta = field_join(*meta_bits)
 
+        # 每次刷新先放开宽度限制，失败态再按这句话的实际长度收回来
+        hug(self.detail_label)
         if status in ("downloading", "merging") and task.get("total_size"):
             downloaded = task.get("downloaded_size") or 0
             total = task.get("total_size") or 0
@@ -699,16 +710,20 @@ class TaskCard(QFrame):
                 # 话表明。没拿到百分比就只留文案，不显示猜出来的数字。
                 percent = float(task.get("merge_percent") or 0)
                 phase = (task.get("message") or "正在处理…").strip()
-                detail = f"{phase} {percent:.0f}% · {detail}" if percent > 0 else f"{phase} · {detail}"
-            self.detail_label.setText(f"{meta} · {detail}" if meta else detail)
+                detail = (f"{phase} {percent:.0f}% {detail}" if percent > 0
+                          else f"{phase} {detail}")
+            self.detail_label.setText(field_join(meta, detail) if meta else detail)
             self.detail_label.setProperty("cssClass", "taskDetail")
         elif status == "completed":
             size_text = download_manager.format_file_size(task.get("total_size") or 0)
-            self.detail_label.setText(f"{meta} · {size_text}" if meta else size_text)
+            self.detail_label.setText(
+                field_join(meta, size_text) if meta else size_text)
             self.detail_label.setProperty("cssClass", "taskDetail")
         elif status == "failed":
             self.detail_label.setText(task.get("error", ""))
             self.detail_label.setProperty("cssClass", "taskError")
+            # 垫黄只包住这句话，不铺满整行
+            hug(self.detail_label, self.detail_label.text())
         else:
             self.detail_label.setText(meta)
             self.detail_label.setProperty("cssClass", "taskDetail")
@@ -798,16 +813,19 @@ class DownloadPage(QWidget):
         # 卡片高度固定为内容需求，防止被滚动区拉伸造成内部空白
         input_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.input_card = input_card
+        attach_panel(input_card)
         input_vbox = QVBoxLayout(input_card)
         input_vbox.setContentsMargins(16, 10, 16, 12)
         input_vbox.setSpacing(8)
 
-        input_title = QLabel("添加下载任务")
-        input_title.setProperty("cssClass", "sectionTitle")
-        # 固定标题行高，避免 Qt 布局在滚动容器中把标题拉伸出异常高度
-        input_title.setFixedHeight(22)
-        input_title.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        input_vbox.addWidget(input_title)
+        input_head = QHBoxLayout()
+        input_head.setSpacing(10)
+        input_head.addWidget(title_pair("添加下载任务", "ADD"))
+        self.links_field = field("0 条链接")
+        self.links_field.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        input_head.addWidget(self.links_field, 1)
+        input_vbox.addLayout(input_head)
 
         self.url_input = UrlInputEdit()
         self.url_input.setPlaceholderText(
@@ -879,12 +897,9 @@ class DownloadPage(QWidget):
             f"当前最大并发: {config_manager.get_max_task()}，可在设置中调整"
         )
         self.concurrent_label.setProperty("muted", True)
-        add_button = QPushButton("开始下载")
-        add_button.setProperty("primary", True)
-        add_button.setProperty("cta", True)   # 主行动按钮：更大、更醒目
-        add_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_button = ActionButton("开始下载", "cta")   # 主行动按钮：一组只放一个
         add_button.clicked.connect(self._add_tasks)
-        clear_button = QPushButton("清空已完成")
+        clear_button = ActionButton("清空已完成", "secondary")
         clear_button.clicked.connect(self._clear_completed)
         action_row.addWidget(self.concurrent_label, 1)
         action_row.addWidget(clear_button)
@@ -896,6 +911,7 @@ class DownloadPage(QWidget):
         bar_layout.setContentsMargins(16, 10, 16, 10)
         bar_layout.setSpacing(10)
         bar_layout.addLayout(action_row)
+        attach_panel(action_bar, side="right")
 
         # ---- 下方滚动区：输入卡片 + 任务列表 + 预览面板（整页一体滚动） ----
         self.page_scroll = QScrollArea()
@@ -910,10 +926,23 @@ class DownloadPage(QWidget):
         # 输入卡片随页面一起滚动（不再悬浮固定在顶部）
         layout.addWidget(input_card)
 
+        # 任务区标题：// TASKS + 真实计数（与输入区之间只用细线分区，不再叠一层卡片）
+        tasks_head = QHBoxLayout()
+        tasks_head.setSpacing(10)
+        # 这一行直接贴在滚动区右边缘上：右侧留出滚动条宽度，计数才不会被裁
+        tasks_head.setContentsMargins(0, 0, 12, 0)
+        tasks_head.addWidget(title_pair("任务", "TASKS"))
+        self.tasks_field = field("0 条")
+        self.tasks_field.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        tasks_head.addWidget(self.tasks_field, 1)
+        layout.addLayout(tasks_head)
+
         # ---- 任务列表（随滚动区滚动） ----
         self.empty_state = QFrame()
         self.empty_state.setObjectName("emptyState")
         self.empty_state.setMinimumHeight(150)
+        self.empty_state.setProperty("cssClass", "plain")
         empty_lay = QVBoxLayout(self.empty_state)
         empty_lay.setContentsMargins(24, 30, 24, 30)
         empty_lay.setSpacing(6)
@@ -927,8 +956,9 @@ class DownloadPage(QWidget):
         empty_hint.setProperty("cssClass", "emptyHint")
         empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_hint.setWordWrap(True)
+        empty_hint.setMaximumWidth(640)
         empty_lay.addWidget(empty_title)
-        empty_lay.addWidget(empty_hint)
+        empty_lay.addWidget(empty_hint, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.empty_state)
 
         self.list_host = QWidget()
@@ -965,14 +995,16 @@ class DownloadPage(QWidget):
     # ---------------------------------------------------------------- 标签
 
     def _set_hint(self, text: str, error: bool = False) -> None:
-        """提示语：失败时切成红色错误态
+        """提示语：失败时用红色文字明确反馈
 
         粘贴了标题这类情况，用户预期是"应该出卡片"，一行灰色小字会被当成界面卡住
         而反复按回车（实测连按 7 次）。反馈必须显眼到不可能看漏。
         """
         self.tag_hint.setText(text)
         self.tag_hint.setProperty("muted", "false" if error else True)
+        # 出错时切到红色文字状态，视线一扫就到
         self.tag_hint.setProperty("cssClass", "taskError" if error else "")
+        hug(self.tag_hint, text if error else None)
         self.tag_hint.style().unpolish(self.tag_hint)
         self.tag_hint.style().polish(self.tag_hint)
 
@@ -1127,14 +1159,22 @@ class DownloadPage(QWidget):
         # 走 _set_hint：成功提交后要把上一轮的红色错误提示恢复成常规样式
         if self._tag_cards:
             self._set_hint(
-                f"已固定 {len(self._tag_cards)} 个链接 · 悬停预览低清画面 · "
-                "右键选清晰度/查看链接 · 双击恢复文本 · 点击“开始下载”加入队列"
+                f"已固定 {len(self._tag_cards)} 个链接：悬停预览低清画面，"
+                "右键选清晰度/查看链接，双击恢复文本，点击“开始下载”加入队列"
             )
         else:
             self._set_hint(
                 "回车生成链接卡片：自动解析标题，清晰度只列该链接真正提供的档位（抖音图文按原图整组下载）；"
                 "右键可查看原链接，双击恢复文本"
             )
+        self._renumber_tags()
+
+    def _renumber_tags(self) -> None:
+        """链接卡片按当前顺序重排编号（删一条，后面的编号跟着走）"""
+        for index, card in enumerate(self._tag_cards, start=1):
+            card.set_index(index)
+        if hasattr(self, "links_field"):
+            self.links_field.setText(f"{len(self._tag_cards)} 条链接")
 
     # ---------------------------------------------------------------- 悬停小窗
 
@@ -1292,6 +1332,7 @@ class DownloadPage(QWidget):
         lay = QHBoxLayout(notice)
         lay.setContentsMargins(12, 6, 10, 6)
         lay.setSpacing(10)
+        lay.addWidget(flag("注意"))
         self.ffmpeg_notice_text = QLabel("")
         self.ffmpeg_notice_text.setObjectName("ffmpegNoticeText")
         self.ffmpeg_notice_text.setWordWrap(True)
@@ -1433,6 +1474,7 @@ class DownloadPage(QWidget):
             self._cards[task_id] = card
             self.list_layout.insertWidget(self.list_layout.count() - 1, card)
         card.setVisible(True)
+        card.set_index(list(self._cards).index(task_id) + 1)
         card.update_task(task)
 
     def _on_card_config(self, task_id: str, quality: str, file_format: str) -> None:
@@ -1467,3 +1509,7 @@ class DownloadPage(QWidget):
                 self.list_layout.removeWidget(card)
                 card.deleteLater()
         self.empty_state.setVisible(not self._cards)
+        active = len(download_manager._active)
+        self.tasks_field.setText(
+            field_join(f"{len(self._cards)} 条", f"进行中 {active}" if active else "")
+        )

@@ -3,9 +3,9 @@
 鼠标悬停标签卡超过 0.5 秒弹出小窗，播放该视频的低清在线流（qn=16，失败回退 qn=32）；
 鼠标移开自动关闭。独立于大预览面板的代理端口与全局状态，二者互不干扰。
 
-小窗版式（iPhone 浮窗美学）：
-- 顶部标识栏：品牌圆点 + 视频标题（超宽自动省略）+ 「低清」徽章，深色圆角上沿
-- 视频区按实际宽高比精确伸缩（无 letterbox 黑边），整窗圆角遮罩
+小窗版式（白色浮层、1px 浅灰细线）：
+- 顶部标识栏：状态点 + 视频标题（超宽自动省略）+「低清」徽章，下沿 1px 细线
+- 视频区按实际宽高比精确伸缩（无 letterbox 黑边）；上色全部走全局 QSS 的 objectName
 - 出现位置与标签卡左边缘对齐、位于其正下方，并限制在屏幕内
 
 生命周期（防孤儿弹窗）：鼠标移出小窗 250ms 后自隐藏（期间移回锚点标签则保留）；
@@ -19,8 +19,7 @@ import threading
 import requests
 from loguru import logger
 
-from PySide6.QtCore import Qt, QRect, QTimer, QUrl, Signal
-from PySide6.QtGui import QRegion
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QStackedWidget, QVBoxLayout
@@ -101,7 +100,6 @@ class HoverPreview(QFrame):
 
     VIDEO_W = 400        # 视频区基准宽度
     CAPTION_H = 30       # 标识栏高度
-    RADIUS = 10          # 整窗圆角
     MAX_VIDEO_H = 460    # 竖屏视频时视频区高度上限（超出则收窄宽度）
 
     ready = Signal(str)      # 标题（流就绪，回主线程播放）
@@ -115,26 +113,9 @@ class HoverPreview(QFrame):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setStyleSheet(
-            f"""
-            HoverPreview {{
-                background: #0A0A0A;
-                border: 1px solid rgba(10, 132, 255, 0.45);
-            }}
-            QFrame#hoverCaption {{
-                background: #1C1C1E;
-                border-top-left-radius: {self.RADIUS - 1}px;
-                border-top-right-radius: {self.RADIUS - 1}px;
-                border-bottom: 1px solid #3A3A3C;
-            }}
-            QLabel#hoverTitle {{ color: #F5F5F7; font-size: 11px; background: transparent; }}
-            QLabel#hoverBadge {{
-                color: #64D2FF; background: rgba(10, 132, 255, 0.20);
-                border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 600;
-            }}
-            QLabel#hoverDot {{ background: #0A84FF; border-radius: 3px; }}
-            """
-        )
+        # 上色全部交给全局 QSS 的 objectName 规则（HoverPreview / hoverCaption /
+        # hoverTitle / hoverBadge / hoverDot / hoverMsg / hoverVideo）：
+        # 控件级样式表会级联进子控件与弹出层，且把色值写死在业务代码里
         self._ratio_w = 16
         self._ratio_h = 9
         self._anchor = None
@@ -183,20 +164,20 @@ class HoverPreview(QFrame):
 
         # 视频 / 消息 两态
         self.stack = QStackedWidget()
-        self.stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        self.stack.setProperty("cssClass", "plain")
         lay.addWidget(self.stack)
 
         self.video = QVideoWidget()
-        self.video.setStyleSheet("background: #0A0A0A;")
+        self.video.setObjectName("hoverVideo")
         self.video.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
         self.stack.addWidget(self.video)
 
         msg_page = QFrame()
-        msg_page.setStyleSheet("background: #0A0A0A;")
+        msg_page.setProperty("cssClass", "plain")
         msg_lay = QVBoxLayout(msg_page)
         msg_lay.setContentsMargins(20, 0, 20, 0)
         self.msg_label = QLabel("正在加载低清预览…")
-        self.msg_label.setStyleSheet("color: #F0F0F0; font-size: 12px;")
+        self.msg_label.setObjectName("hoverMsg")
         self.msg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.msg_label.setWordWrap(True)
         msg_lay.addWidget(self.msg_label)
@@ -215,13 +196,10 @@ class HoverPreview(QFrame):
         w, h = video_w, self.CAPTION_H + video_h
         if self.width() != w or self.height() != h:
             self.setFixedSize(w, h)
-            # 未 show 时 setFixedSize 不触发 resizeEvent，此处显式补打遮罩
-            self._apply_mask()
             self._replace_near()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._apply_mask()
         self._replace_near()
 
     def enterEvent(self, event) -> None:
@@ -268,24 +246,6 @@ class HoverPreview(QFrame):
         if not self._target_url:
             return False
         return self._target_url == jiudown_engine.normalize_url(url)
-
-    def _apply_mask(self) -> None:
-        """整窗圆角遮罩：视频四角随之收圆（子控件不受父级圆角裁剪，须显式遮罩）"""
-        r = self.RADIUS
-        w, h = self.width(), self.height()
-        region = QRegion(QRect(0, r, w, h - 2 * r))
-        region += QRegion(QRect(r, 0, w - 2 * r, r))
-        region += QRegion(QRect(r, h - r, w - 2 * r, r))
-        # 四角：r×r 方块 ∩ 2r×2r 椭圆（椭圆心在内侧 (r,r) 处）= 四分圆
-        region += QRegion(QRect(0, 0, r, r)) & QRegion(
-            QRect(0, 0, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        region += QRegion(QRect(w - r, 0, r, r)) & QRegion(
-            QRect(w - 2 * r, 0, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        region += QRegion(QRect(0, h - r, r, r)) & QRegion(
-            QRect(0, h - 2 * r, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        region += QRegion(QRect(w - r, h - r, r, r)) & QRegion(
-            QRect(w - 2 * r, h - 2 * r, 2 * r, 2 * r), QRegion.RegionType.Ellipse)
-        self.setMask(region)
 
     def place_near(self, anchor) -> None:
         """记录锚点并把小窗放到其正下方：左边缘对齐、间距 8px，屏幕内收敛"""

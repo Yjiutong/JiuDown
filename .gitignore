@@ -31,3 +31,6 @@ __pycache__/
 /runtime
 /resources/*
 !/resources/app.ico
+# 例外：界面字体 Saira（SIL OFL 1.1，含 OFL 许可证）随仓库分发
+!/resources/fonts
+!/resources/fonts/*
