@@ -941,7 +941,7 @@ class DownloadPage(QWidget):
         # ---- 任务列表（随滚动区滚动） ----
         self.empty_state = QFrame()
         self.empty_state.setObjectName("emptyState")
-        self.empty_state.setMinimumHeight(150)
+        self.empty_state.setMinimumHeight(190)
         self.empty_state.setProperty("cssClass", "plain")
         empty_lay = QVBoxLayout(self.empty_state)
         empty_lay.setContentsMargins(24, 30, 24, 30)
