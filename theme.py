@@ -35,66 +35,84 @@ DUR_EDGE = 300
 # =====================================================================
 
 WHITE_BASE = {
-    # 白色表面与深灰文字
-    "paper": "#FFFFFF",
-    "panel": "#FFFFFF",
-    "ink": "#202124",
-    "ink2": "#5F6368",
-    "ink3": "#9AA0A6",
-    "rule": "#E8EAED",
-    "rule_strong": "#DADCE0",
-    "chip": "#F5F6F7",
-    "chip_hover": "#ECEEF1",
-    "chip_press": "#E3E6EA",
-    # 蓝色仅用于焦点、选中文本与进行中状态
-    "signal": "#1A73E8",
-    "on_signal": "#FFFFFF",
-    "mark": "#1A73E8",
-    "mark_argb": "#00000000",
-    "trace": "#1A73E8",
-    "tag_bg": "#F1F3F4",
-    "tag_fg": "#202124",
-    "danger": "#D93025",
-    "danger_tint": "#FCE8E6",
-    "scrim": "#20212420",
-    # 兼容旧媒体/命令栏键名：统一白色
-    "command_bar": "#FFFFFF",
-    "command_bar_text": "#202124",
-    "command_bar_sub": "#5F6368",
-    "command_bar_hover": "#F1F3F4",
-    "command_bar_press": "#E8EAED",
-    "command_bar_rail": "#E8EAED",
-    "chrome": "#FFFFFF",
-    "chrome_text": "#202124",
-    "chrome_sub": "#5F6368",
-    "chrome_hover": "#F1F3F4",
-    "chrome_active": "#E8EAED",
-    "chrome_press": "#DADCE0",
-    "chrome_line": "#E8EAED",
-    # 输入 / 控件
-    "input": "#FFFFFF",
-    "input_disabled": "#F5F6F7",
-    "input_disabled_text": "#9AA0A6",
-    "btn_hover": "#F1F3F4",
-    "btn_press": "#E8EAED",
-    "disabled_fill": "#F5F6F7",
-    "disabled_text": "#9AA0A6",
-    "tooltip_bg": "#FFFFFF",
-    "tooltip_text": "#202124",
-    "tooltip_border": "#DADCE0",
-    "scroll_handle": "#DADCE0",
-    "scroll_handle_hover": "#9AA0A6",
-    "progress_bg": "#E8EAED",
-    "media_surface": "#FFFFFF",
-    "media_groove": "#E8EAED",
-    "media_text": "#202124",
-    "log_bg": "#FFFFFF",
-    "log_border": "#E8EAED",
-    "log_text": "#202124",
-    "log_dl_text": "#5F6368",
+    # ---- 中性灰阶（预定义 8 档，不使用纯黑）----
+    "paper":          "#FFFFFF",
+    "panel":          "#FFFFFF",
+    "surface_subtle": "#FAFBFC",
+    "ink":            "#1F2430",
+    "ink2":           "#5B6472",
+    "ink3":           "#98A1AF",
+    "rule":           "#EDF0F3",
+    "rule_strong":    "#DEE3E9",
+    "chip":           "#F4F6F8",
+    "chip_hover":     "#EAEEF2",
+    "chip_press":     "#E1E6EC",
+    # ---- 主色（蓝）+ 5 档明暗，焦点/激活/CTA 专用 ----
+    "signal":         "#2563EB",
+    "signal_hover":   "#1D4ED8",
+    "signal_press":   "#1E40AF",
+    "signal_soft":    "#EFF4FF",
+    "signal_tint":    "#DBE7FF",
+    "on_signal":      "#FFFFFF",
+    "trace":          "#2563EB",
+    "mark":           "#2563EB",
+    "mark_argb":      "#00000000",
+    # ---- 语义色（各带浅底）----
+    "danger":         "#DC2626",
+    "danger_tint":    "#FEF2F2",
+    "warning":        "#D97706",
+    "warning_tint":   "#FFFBEB",
+    "success":        "#059669",
+    "success_tint":   "#ECFDF5",
+    "tag_bg":         "#F1F4F8",
+    "tag_fg":         "#1F2430",
+    "scrim":          "#1F243020",
+    # ---- chrome（标题栏/侧栏）----
+    "command_bar":        "#FFFFFF",
+    "command_bar_text":   "#1F2430",
+    "command_bar_sub":    "#5B6472",
+    "command_bar_hover":  "#F4F6F8",
+    "command_bar_press":  "#E1E6EC",
+    "command_bar_rail":   "#EDF0F3",
+    "chrome":             "#FFFFFF",
+    "chrome_text":        "#5B6472",
+    "chrome_sub":         "#98A1AF",
+    "chrome_hover":       "#F4F6F8",
+    "chrome_active":      "#EFF4FF",
+    "chrome_press":       "#E1E6EC",
+    "chrome_line":        "#EDF0F3",
+    # ---- 表单 / 控件 ----
+    "input":                "#FFFFFF",
+    "input_disabled":       "#F4F6F8",
+    "input_disabled_text":  "#98A1AF",
+    "btn_hover":            "#F4F6F8",
+    "btn_press":            "#E1E6EC",
+    "disabled_fill":        "#F4F6F8",
+    "disabled_text":        "#98A1AF",
+    "tooltip_bg":           "#FFFFFF",
+    "tooltip_text":         "#1F2430",
+    "tooltip_border":       "#DEE3E9",
+    "scroll_handle":        "#DEE3E9",
+    "scroll_handle_hover":  "#98A1AF",
+    "progress_bg":          "#EDF0F3",
+    "media_surface":        "#FFFFFF",
+    "media_groove":         "#EDF0F3",
+    "media_text":           "#1F2430",
+    "log_bg":               "#FFFFFF",
+    "log_border":           "#EDF0F3",
+    "log_text":             "#1F2430",
+    "log_dl_text":          "#5B6472",
+    # ---- 阴影（书的"两层阴影"简化为实色短投影，扁平但有层次）----
+    "shadow_ambient": "#E7EBF0",
+    "shadow_direct":  "#D6DDE6",
 }
 
-# 旧键名 → 纯白主题落点
+# 受限字号阶梯（px）：12 / 13 / 15 / 18 / 24 / 30
+# 层级主要靠字重 + 颜色，字号只在这 6 档里取。
+TYPE_SCALE = (12, 13, 15, 18, 24, 30)
+# 受限间距阶梯（px）：相邻值差 >= 25%
+SPACE_SCALE = (4, 8, 12, 16, 24, 32)
+
 _ALIAS_MAP = {
     "bg": "paper",
     "surface": "panel",
@@ -116,28 +134,28 @@ _ALIAS_MAP = {
     "sidebar_sub": "chrome_sub",
     "sidebar_version": "chrome_sub",
     "sidebar_divider": "chrome_line",
-    "nav_checked_text": "chrome_text",
-    "green": "ink",
-    "green_dark": "ink",
-    "green_bg": "chip",
-    "orange": "ink2",
-    "orange_dark": "ink",
-    "orange_bg": "chip",
+    "nav_checked_text": "ink",
+    "green": "success",
+    "green_dark": "success",
+    "green_bg": "success_tint",
+    "orange": "warning",
+    "orange_dark": "warning",
+    "orange_bg": "warning_tint",
     "red": "danger",
     "red_dark": "danger",
     "red_bg": "danger_tint",
     "blue": "trace",
-    "blue_dark": "ink",
-    "blue_bg": "chip",
+    "blue_dark": "trace",
+    "blue_bg": "signal_soft",
     "cyan": "ink2",
     "cyan_dark": "ink",
     "cyan_bg": "chip",
     "gray": "ink2",
     "gray_dark": "ink2",
     "gray_bg": "chip",
-    "gold": "ink2",
-    "gold_dark": "ink",
-    "gold_light": "chip",
+    "gold": "warning",
+    "gold_dark": "warning",
+    "gold_light": "warning_tint",
     "input_disabled_bg": "input_disabled",
     "btn_hover_bg": "btn_hover",
     "primary_disabled_bg": "disabled_fill",
@@ -170,495 +188,336 @@ THEMES = {"light": THEME_WHITE, "dark": THEME_WHITE}
 # =====================================================================
 
 _QSS_TEMPLATE = Template("""
-/* ========== 全局 ========== */
+/* ===================== 全局 ===================== */
 * {
     font-family: $font_family;
     font-size: 13px;
     color: $ink;
 }
-QMainWindow, QWidget, QFrame, QScrollArea, QStackedWidget {
-    background: $paper;
-}
+QMainWindow, QWidget, QFrame, QScrollArea, QStackedWidget { background: $paper; }
 QLabel { background: transparent; }
 QToolTip {
     background: $tooltip_bg; color: $tooltip_text;
-    border: 1px solid $tooltip_border; border-radius: 0px; padding: 5px 9px;
+    border: 1px solid $tooltip_border; border-radius: 8px; padding: 6px 10px;
 }
 
-/* ========== chrome（标题栏 + 侧边导航） ========== */
-QWidget#titleBar { background: $chrome; }
-QWidget#titleBarLeft { background: $chrome; }
-QWidget#titleBarRight { background: $chrome; }
-QLabel#titlebarTitle { color: $chrome_text; font-size: 12px; font-weight: 600; background: transparent; }
-QPushButton[captionBtn="true"] { background: transparent; border: none; border-radius: 0px; padding: 0; }
+/* ===================== chrome：标题栏 + 侧栏 ===================== */
+QWidget#titleBar, QWidget#titleBarLeft, QWidget#titleBarRight { background: $chrome; }
+QLabel#titlebarTitle { color: $ink; font-size: 13px; font-weight: 600; background: transparent; }
+QPushButton[captionBtn="true"] { background: transparent; border: none; padding: 0; }
 
 QFrame#sidebar {
     background: $chrome;
     border: none;
     border-right: 1px solid $chrome_line;
 }
-QLabel#sidebarTitle { color: $chrome_text; font-size: 13px; font-weight: 700; background: transparent; }
-QLabel#sidebarSub { color: $chrome_sub; font-size: 10px; background: transparent; }
-QLabel#sidebarVersion { color: $chrome_sub; font-size: 10px; background: transparent; }
+QLabel#sidebarTitle { color: $ink; font-size: 15px; font-weight: 800; background: transparent; }
+QLabel#sidebarSub, QLabel#sidebarVersion { color: $ink3; font-size: 12px; background: transparent; }
 QFrame#sidebarDivider { background: $chrome_line; border: none; max-height: 1px; margin-left: 12px; }
 
-/* 导航项：当前项一格圆角浅底；展开与收起共用固定行高和图标盒 */
+/* 导航：默认灰字，当前项用主色文字 + 左侧 2px 强调边 + 浅蓝底 */
 QPushButton[nav="true"] {
-    background: transparent;
-    color: $chrome_text;
-    border: none;
-    border-radius: 8px;
-    padding: 0 10px;
-    text-align: left;
-    font-size: 13px;
-    font-weight: 600;
+    background: transparent; color: $ink2;
+    border: none; border-left: 2px solid transparent; border-radius: 8px;
+    padding: 0 10px; text-align: left; font-size: 13px; font-weight: 600;
 }
-QPushButton[nav="true"]:hover { background: $chrome_hover; }
+QPushButton[nav="true"]:hover { background: $chrome_hover; color: $ink; }
 QPushButton[nav="true"]:pressed { background: $chrome_press; }
-QPushButton[nav="true"]:checked { background: $chrome_active; font-weight: 700; }
-QPushButton[nav="true"][collapsed="true"] { padding: 0; text-align: center; }
-QPushButton[nav="true"][collapsed="true"] { border-radius: 8px; }
-QPushButton#sidebarToggle {
-    background: transparent; color: $chrome_text; border: none; border-radius: 8px;
-    margin-left: 4px;
+QPushButton[nav="true"]:checked {
+    background: $chrome_active; color: $signal;
+    border-left: 2px solid $signal; font-weight: 700;
 }
-QPushButton#sidebarToggle:hover { background: $chrome_hover; }
+QPushButton[nav="true"][collapsed="true"] { padding: 0; text-align: center; border-radius: 8px; }
+QPushButton#sidebarToggle {
+    background: transparent; color: $ink3; border: none; border-radius: 8px; margin-left: 4px;
+}
+QPushButton#sidebarToggle:hover { background: $chrome_hover; color: $ink; }
 QPushButton#sidebarToggle:pressed { background: $chrome_press; }
 
-/* ========== 页头 ========== */
-QLabel#pageEyebrow { font-size: 10px; font-weight: 600; color: $ink2; background: transparent; }
-QLabel#pageTitle { font-size: 26px; font-weight: 800; color: $ink; background: transparent; }
-QLabel#pageSubtitle { font-size: 12px; color: $ink2; background: transparent; }
+/* ===================== 页头：层级靠字重与颜色 ===================== */
+QLabel#pageEyebrow { font-size: 12px; font-weight: 600; color: $ink3; background: transparent; }
+QLabel#pageTitle { font-size: 24px; font-weight: 800; color: $ink; background: transparent; }
+QLabel#pageSubtitle { font-size: 13px; color: $ink2; background: transparent; }
 QLabel#statusPill {
-    border-radius: 0px;
-    border: 1px solid $ink;
-    padding: 4px 10px;
-    font-size: 11px;
-    font-weight: 600;
-    background: $panel;
-    color: $ink;
+    border: none; border-radius: 999px; padding: 4px 12px;
+    font-size: 12px; font-weight: 600;
+    background: $chip; color: $ink2;
 }
-QLabel#statusPill[cssClass="badgeGreen"] { color: $ink; background: $panel; }
-QLabel#statusPill[cssClass="badgeRed"] { border: 1px solid $danger; color: $danger; background: $panel; }
-QLabel#statusPill[cssClass="badgeBlue"] { color: $ink; background: $panel; }
-QLabel#statusPill[cssClass="badgeOrange"] { border: 1px solid $rule_strong; background: $chip; color: $ink; font-weight: 700; }
+QLabel#statusPill[cssClass="badgeGreen"] { background: $success_tint; color: $success; }
+QLabel#statusPill[cssClass="badgeRed"] { background: $danger_tint; color: $danger; }
+QLabel#statusPill[cssClass="badgeBlue"] { background: $signal_soft; color: $signal; }
+QLabel#statusPill[cssClass="badgeOrange"] { background: $warning_tint; color: $warning; }
 
-/* ========== 面板（白色表面 + 1px 浅灰细线） ========== */
-QFrame[cssClass="card"] {
+/* ===================== 卡片：少边框，用底色差 + 极浅实色阴影 ===================== */
+QFrame[cssClass="card"], QFrame[cssClass="sectionCard"] {
     background: $panel;
     border: 1px solid $rule;
-    border-radius: 0px;
+    border-radius: 10px;
 }
 QFrame[cssClass="card"]:hover { border-color: $rule_strong; }
 
-QFrame[cssClass="sectionCard"] {
-    background: $panel;
-    border: 1px solid $rule;
-    border-radius: 0px;
-}
-
-QLabel[cssClass="cardTitle"] { color: $ink2; font-size: 10px; background: transparent; }
+QLabel[cssClass="cardTitle"] { color: $ink3; font-size: 12px; font-weight: 600; background: transparent; }
 QLabel[cssClass="cardValue"] { color: $ink; font-size: 30px; font-weight: 800; background: transparent; }
-QLabel[cssClass="cardValueSmall"] { color: $ink; font-size: 17px; font-weight: 700; background: transparent; }
-QLabel[cssClass="cardSub"] { color: $ink3; font-size: 11px; background: transparent; }
-
-/* 面板数值色调：正文深灰，删除相关用红色文字 */
-QLabel[cssClass="cardValue"][tone="orange"] { color: $ink; background: transparent; }
+QLabel[cssClass="cardValueSmall"] { color: $ink; font-size: 18px; font-weight: 700; background: transparent; }
+QLabel[cssClass="cardSub"] { color: $ink3; font-size: 12px; background: transparent; }
 QLabel[cssClass="cardValue"][tone="red"] { color: $danger; }
-QLabel[cssClass="cardValue"][tone="brand"] { color: $ink; font-weight: 800; }
-QLabel[cssClass="cardValueSmall"][tone="orange"] { color: $ink; background: transparent; }
+QLabel[cssClass="cardValue"][tone="brand"] { color: $signal; font-weight: 800; }
 QLabel[cssClass="cardValueSmall"][tone="red"] { color: $danger; }
 
-/* 编号 / 日期 / 计数：等宽数字 */
 QLabel[cssClass="hashLabel"], QLabel[cssClass="field"] {
-    font-family: $mono_family;
-    font-size: 11px;
-    color: $ink2;
-    background: transparent;
+    font-family: $mono_family; font-size: 12px; color: $ink2; background: transparent;
 }
+QLabel[cssClass="configOk"] { color: $success; font-size: 12px; background: transparent; }
+QLabel[cssClass="configError"] { color: $danger; font-size: 12px; background: transparent; }
+QLabel[cssClass="progressSpeed"], QLabel[cssClass="progressEta"],
+QLabel[cssClass="progressSuccess"] { color: $ink2; font-size: 12px; background: transparent; }
+QLabel[cssClass="progressError"] { color: $danger; font-size: 12px; background: transparent; }
 
-QLabel[cssClass="configOk"] { color: $ink; font-size: 11px; background: transparent; }
-QLabel[cssClass="configError"] { color: $danger; font-size: 11px; background: transparent; }
-
-QLabel[cssClass="progressSpeed"] { color: $ink2; font-size: 11px; background: transparent; }
-QLabel[cssClass="progressEta"] { color: $ink2; font-size: 11px; background: transparent; }
-QLabel[cssClass="progressSuccess"] { color: $ink; font-size: 11px; background: transparent; }
-QLabel[cssClass="progressError"] { color: $danger; font-size: 11px; background: transparent; }
-
-QLabel[cssClass="sectionTitle"] { color: $ink; font-size: 15px; font-weight: 800; background: transparent; }
-QLabel[cssClass="sectionHint"] { color: $ink2; font-size: 11px; background: transparent; }
+QLabel[cssClass="sectionTitle"] { color: $ink; font-size: 15px; font-weight: 700; background: transparent; }
+QLabel[cssClass="sectionHint"] { color: $ink2; font-size: 12px; background: transparent; }
 QFrame[cssClass="divider"] { background: $rule; max-height: 1px; border: none; }
-QLabel[cssClass="formLabel"] { color: $ink; font-size: 12px; font-weight: 600; background: transparent; }
+QLabel[cssClass="formLabel"] { color: $ink; font-size: 13px; font-weight: 600; background: transparent; }
 
-/* ========== 标签 / 状态 ========== */
+/* ===================== 徽标：去边框，用浅底 + 语义色文字 ===================== */
 QLabel[cssClass="badge"], QLabel[cssClass="badgeGreen"], QLabel[cssClass="badgeRed"],
 QLabel[cssClass="badgeOrange"], QLabel[cssClass="badgeBlue"], QLabel[cssClass="badgeGray"],
 QLabel[cssClass="badgeCyan"], QLabel[cssClass="statusLabel"] {
-    border-radius: 0px;
-    padding: 1px 7px;
-    font-size: 10px;
-    font-weight: 600;
-    background: transparent;
-    color: $ink;
-    border: 1px solid $ink;
+    border: none; border-radius: 6px; padding: 2px 9px;
+    font-size: 12px; font-weight: 600;
+    background: $chip; color: $ink2;
 }
-QLabel[cssClass="badgeGreen"] { color: $ink; border: 1px solid $ink; }
-QLabel[cssClass="badgeRed"] { color: $danger; border: 1px solid $danger; }
-QLabel[cssClass="badgeOrange"] { color: $ink2; background: $chip; border: 1px solid $rule_strong; font-weight: 700; }
-QLabel[cssClass="badgeBlue"] { color: $ink; border: 1px solid $ink; }
-QLabel[cssClass="badgeGray"] { color: $ink2; border: 1px dashed $ink2; }
-QLabel[cssClass="badgeCyan"] { color: $ink2; border: 1px dashed $ink2; }
+QLabel[cssClass="badgeGreen"], QLabel[cssClass="statusLabel"][tone="green"] {
+    background: $success_tint; color: $success;
+}
+QLabel[cssClass="badgeRed"], QLabel[cssClass="statusLabel"][tone="red"] {
+    background: $danger_tint; color: $danger;
+}
+QLabel[cssClass="badgeOrange"], QLabel[cssClass="statusLabel"][tone="orange"] {
+    background: $warning_tint; color: $warning;
+}
+QLabel[cssClass="badgeBlue"] { background: $signal_soft; color: $signal; }
+QLabel[cssClass="badgeGray"], QLabel[cssClass="badgeCyan"] { background: $chip; color: $ink2; }
 
-/* 编号标签：浅灰底深灰字 */
 QLabel[cssClass="tagNo"] {
-    background: $tag_bg; color: $tag_fg;
-    font-size: 11px; font-weight: 700;
-    padding: 2px 10px 2px 7px;
-    border: none; border-radius: 0px;
+    background: $tag_bg; color: $ink2;
+    font-size: 12px; font-weight: 700;
+    padding: 2px 10px 2px 7px; border: none; border-radius: 6px;
 }
-QLabel[cssClass="tagNo"][current="true"] { background: $chip; color: $ink; }
+QLabel[cssClass="tagNo"][current="true"] { background: $signal_soft; color: $signal; }
 
-QLabel[cssClass="statusLabel"][tone="green"] { color: $ink; border: 1px solid $ink; }
-QLabel[cssClass="statusLabel"][tone="orange"] { color: $ink2; background: $chip; border: 1px solid $rule_strong; font-weight: 700; }
-QLabel[cssClass="statusLabel"][tone="red"] { color: $danger; border: 1px solid $danger; }
-
-/* ========== 按钮 ========== */
+/* ===================== 按钮 ===================== */
 QPushButton {
-    background: $chip;
-    color: $ink;
-    border: none;
-    border-radius: 0px;
-    padding: 8px 18px 8px 14px;
-    font-size: 12px;
-    font-weight: 600;
+    background: $chip; color: $ink;
+    border: none; border-radius: 8px;
+    padding: 8px 16px; font-size: 13px; font-weight: 600;
 }
 QPushButton:hover { background: $btn_hover; }
 QPushButton:pressed { background: $btn_press; }
 QPushButton:disabled { color: $disabled_text; background: $disabled_fill; }
+QPushButton:focus { border: 1px solid $signal; }
 
-QPushButton[primary="true"] {
-    background: $signal;
-    color: $on_signal;
-    font-weight: 700;
+QPushButton[primary="true"], QPushButton[cta="true"] {
+    background: $signal; color: $on_signal; font-weight: 700;
 }
-QPushButton[primary="true"]:hover { background: $signal; color: $on_signal; }
-QPushButton[primary="true"]:pressed { background: $signal; color: $on_signal; }
-QPushButton[primary="true"]:disabled { background: $disabled_fill; color: $disabled_text; }
-
-/* 主行动按钮（CTA）：更大更醒目，一个动作区只放一个 */
 QPushButton[cta="true"] {
-    background: $signal;
-    color: $on_signal;
-    border: none;
-    border-radius: 0px;
-    font-size: 13px;
-    font-weight: 800;
-    padding: 0 26px 0 18px;
-    min-width: 112px;
-    min-height: 38px;
+    border-radius: 8px; font-size: 13px; font-weight: 700;
+    padding: 0 20px; min-width: 104px; min-height: 36px;
 }
-QPushButton[cta="true"]:hover { background: $signal; color: $on_signal; }
-QPushButton[cta="true"]:pressed { background: $signal; color: $on_signal; }
-QPushButton[cta="true"]:disabled { background: $disabled_fill; color: $disabled_text; }
-
-/* 删除：红色文字，指向时用极浅红底 */
-QPushButton[danger="true"] { background: $chip; color: $danger; font-weight: 700; }
-QPushButton[danger="true"]:hover { background: $danger_tint; color: $danger; }
-QPushButton[danger="true"]:pressed { background: $danger_tint; color: $danger; }
-
-QPushButton[small="true"] { padding: 5px 13px 5px 10px; font-size: 11px; }
-
-/* 自绘按钮：默认底让位给 ui_widgets.py */
+QPushButton[primary="true"]:hover, QPushButton[cta="true"]:hover { background: $signal_hover; }
+QPushButton[primary="true"]:pressed, QPushButton[cta="true"]:pressed { background: $signal_press; }
+QPushButton[primary="true"]:disabled, QPushButton[cta="true"]:disabled {
+    background: $disabled_fill; color: $disabled_text;
+}
+QPushButton[danger="true"] { background: $danger_tint; color: $danger; font-weight: 700; }
+QPushButton[danger="true"]:hover { background: $danger_tint; }
+QPushButton[small="true"] { padding: 5px 12px; font-size: 12px; }
 QPushButton[actionButton="true"] { background: transparent; border: none; }
 
-/* ========== 右键菜单 ==========
-   注意：QMenu 是独立的弹出窗口，一旦背景没被画上就露出未初始化的黑色表面
-   （控件级 setStyleSheet("background: transparent;") 会级联到弹出的 QMenu，
-   把这里的背景覆盖掉）。因此 QMenu 与 QMenu::item 都必须显式给出背景与前景。 */
+/* ===================== 右键菜单 ===================== */
 QMenu {
-    background: $panel;
-    border: 1px solid $ink;
-    border-radius: 0px;
-    padding: 4px;
-    color: $ink;
-    font-size: 12px;
+    background: $panel; border: 1px solid $rule_strong; border-radius: 10px;
+    padding: 6px; color: $ink; font-size: 13px;
 }
-QMenu::item {
-    background: transparent;
-    color: $ink;
-    padding: 6px 22px;
-    border-radius: 0px;
-}
+QMenu::item { background: transparent; color: $ink; padding: 7px 20px; border-radius: 6px; }
 QMenu::item:selected { background: $chip; color: $ink; }
-QMenu::item:checked { color: $ink; font-weight: 700; }
+QMenu::item:checked { color: $signal; font-weight: 700; }
 QMenu::item:disabled { color: $ink3; }
 QMenu::separator { height: 1px; background: $rule; margin: 4px 8px; }
 QMenu::indicator { width: 12px; height: 12px; margin-left: 4px; }
 
-/* ========== 输入控件 ========== */
+/* ===================== 表单控件：去全框，焦点才显主色线 ===================== */
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {
     background: $input;
-    border: 1px solid $rule_strong;
-    border-radius: 0px;
-    padding: 7px 10px;
-    color: $ink;
-    selection-background-color: #D3E3FD;
-    selection-color: $ink;
+    border: 1px solid $rule_strong; border-radius: 8px;
+    padding: 8px 12px; color: $ink;
+    selection-background-color: $signal_tint; selection-color: $ink;
 }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QComboBox:focus {
-    border: 1px solid $trace;
+    border: 1px solid $signal;
 }
-QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QSpinBox:disabled, QComboBox:disabled {
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
+QSpinBox:disabled, QComboBox:disabled {
     background: $input_disabled; color: $input_disabled_text;
 }
-/* 单行输入不跟着行高拉伸：保持固定厚度，记录行不会撑出空隙 */
-QLineEdit, QComboBox, QSpinBox { max-height: 30px; }
-QComboBox { padding: 4px 10px; }
+QLineEdit, QComboBox, QSpinBox { max-height: 34px; }
+QComboBox { padding: 6px 12px; }
 QComboBox::drop-down { border: none; width: 22px; }
-/* 下拉指示由 ui_widgets.py 绘制 */
 QComboBox::down-arrow { width: 0; height: 0; }
 QComboBox QAbstractItemView {
-    background: $panel;
-    border: 1px solid $ink;
-    border-radius: 0px;
-    padding: 4px;
-    outline: 0;
-    color: $ink;
-    selection-background-color: #D3E3FD;
-    selection-color: $ink;
+    background: $panel; border: 1px solid $rule_strong; border-radius: 10px;
+    padding: 6px; outline: 0; color: $ink;
+    selection-background-color: $signal_soft; selection-color: $ink;
 }
 QComboBox QAbstractItemView::item {
-    min-height: 26px;
-    padding: 2px 9px;
-    border: none;
-    border-radius: 0px;
-    color: $ink;
-    background: transparent;
+    min-height: 28px; padding: 3px 10px; border: none; border-radius: 6px;
+    color: $ink; background: transparent;
 }
-QComboBox QAbstractItemView::item:hover,
-QComboBox QAbstractItemView::item:selected {
-    background: $signal;
-    color: $on_signal;
+QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected {
+    background: $signal_soft; color: $signal;
 }
-QSpinBox::up-button, QSpinBox::down-button {
-    border: none; background: transparent; width: 18px;
-}
+QSpinBox::up-button, QSpinBox::down-button { border: none; background: transparent; width: 18px; }
 QSpinBox::up-arrow, QSpinBox::down-arrow { width: 0; height: 0; }
 
-/* ========== 复选框 ========== */
-QCheckBox {
-    spacing: 9px;
-    color: $ink;
-}
+/* ===================== 复选框 ===================== */
+QCheckBox { spacing: 9px; color: $ink; }
 QCheckBox::indicator {
-    width: 16px; height: 16px;
-    border-radius: 0px;
-    border: 1px solid $ink;
-    background: $input;
+    width: 16px; height: 16px; border-radius: 4px;
+    border: 1px solid $rule_strong; background: $input;
 }
-QCheckBox::indicator:checked {
-    background: $signal;
-    border-color: $ink;
-}
+QCheckBox::indicator:checked { background: $signal; border-color: $signal; }
 QCheckBox::indicator:disabled { background: $input_disabled; border-color: $rule_strong; }
 
-/* ========== 进度条 ========== */
+/* ===================== 进度条 ===================== */
 QProgressBar {
-    background: $progress_bg;
-    border: none;
-    border-radius: 0px;
-    min-height: 6px;
-    max-height: 6px;
-    text-align: center;
-    color: transparent;
+    background: $progress_bg; border: none; border-radius: 999px;
+    min-height: 6px; max-height: 6px; text-align: center; color: transparent;
 }
-QProgressBar::chunk { background: $trace; border-radius: 0px; }
-QProgressBar[color="green"]::chunk { background: $trace; }
+QProgressBar::chunk { background: $signal; border-radius: 999px; }
+QProgressBar[color="green"]::chunk { background: $success; }
 QProgressBar[color="red"]::chunk { background: $danger; }
-QProgressBar[color="orange"]::chunk { background: $signal; }
+QProgressBar[color="orange"]::chunk { background: $warning; }
 
-/* ========== 日志面板（代码只归等宽） ========== */
-QTextEdit[cssClass="logPanel"] {
-    background: $log_bg;
-    color: $log_text;
-    border: 1px solid $log_border;
-    border-radius: 0px;
-    font-family: $mono_family;
-    font-size: 11px;
-    padding: 10px;
-    selection-background-color: #D3E3FD;
-    selection-color: $ink;
+/* ===================== 日志 ===================== */
+QTextEdit[cssClass="logPanel"], QTextEdit[cssClass="dlLogPanel"] {
+    background: $log_bg; color: $log_text;
+    border: 1px solid $log_border; border-radius: 10px;
+    font-family: $mono_family; font-size: 12px; padding: 12px;
+    selection-background-color: $signal_tint; selection-color: $ink;
 }
-QTextEdit[cssClass="dlLogPanel"] {
-    background: $panel;
-    color: $log_dl_text;
-    border: 1px solid $rule;
-    border-radius: 0px;
-    font-family: $mono_family;
-    font-size: 11px;
-    padding: 10px;
-    selection-background-color: #D3E3FD;
-    selection-color: $ink;
-}
+QTextEdit[cssClass="dlLogPanel"] { color: $log_dl_text; }
 
-/* ========== 设置分组 ========== */
-QWidget#settingsHost { background: $paper; }
-/* 设置页滚动内容页：显式主题底色，杜绝视口调色板回退发黑 */
-QWidget#settingsScrollPage { background: $paper; }
-QScrollArea { background: $paper; border: none; }
+/* ===================== 设置页 / 滚动区 ===================== */
+QWidget#settingsHost, QWidget#settingsScrollPage, QScrollArea { background: $paper; }
+QScrollArea { border: none; }
 QScrollArea > QWidget > QWidget { background: $paper; }
+QWidget#tagHost, QWidget#pageHost, QWidget#taskListHost { background: $paper; }
 
-/* ========== 透明容器 ==========
-   统一在全局 QSS 里按 objectName 上色，禁止在业务代码里用
-   setStyleSheet("background: transparent;") —— 裸声明的控件级样式表会级联到
-   该控件下的所有子控件（包括 QMenu / QToolTip 这类弹出窗口），
-   把弹出层背景覆盖成透明，最终露出未初始化表面的纯黑底。 */
-QWidget#tagHost,
-QWidget#pageHost,
-QWidget#taskListHost { background: $paper; }
-
-/* ========== 标签页 ========== */
-QTabWidget::pane {
-    border: 1px solid $rule;
-    border-radius: 0px;
-    background: $panel;
-    top: -1px;
-}
-QTabWidget QTabWidget,
-QTabWidget QTabWidget::pane,
+/* ===================== 标签页 ===================== */
+QTabWidget::pane { border: 1px solid $rule; border-radius: 10px; background: $panel; top: -1px; }
+QTabWidget QTabWidget, QTabWidget QTabWidget::pane,
 QTabWidget QStackedWidget { background: $panel; }
 QTabBar { background: transparent; }
 QTabBar::tab {
-    background: transparent;
-    color: $ink2;
-    border: none;
-    padding: 8px 16px;
-    margin-right: 2px;
-    border-radius: 0px;
-    font-size: 12px;
-    font-weight: 600;
+    background: transparent; color: $ink2; border: none;
+    padding: 8px 16px; margin-right: 2px; border-radius: 8px;
+    font-size: 13px; font-weight: 600;
 }
 QTabBar::tab:hover { color: $ink; background: $chip; }
-QTabBar::tab:selected { background: $chrome_active; color: $ink; font-weight: 700; }
+QTabBar::tab:selected { background: $signal_soft; color: $signal; font-weight: 700; }
 
-/* ========== 滚动条 ========== */
-QScrollBar:vertical {
-    background: transparent; width: 10px; margin: 0px;
-}
-QScrollBar::handle:vertical {
-    background: $scroll_handle; border-radius: 0px; min-height: 30px;
-}
+/* ===================== 滚动条 ===================== */
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0px; }
+QScrollBar::handle:vertical { background: $scroll_handle; border-radius: 999px; min-height: 30px; }
 QScrollBar::handle:vertical:hover { background: $scroll_handle_hover; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-QScrollBar:horizontal {
-    background: transparent; height: 10px; margin: 0px;
-}
-QScrollBar::handle:horizontal {
-    background: $scroll_handle; border-radius: 0px; min-width: 30px;
-}
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0px; }
+QScrollBar::handle:horizontal { background: $scroll_handle; border-radius: 999px; min-width: 30px; }
 QScrollBar::handle:horizontal:hover { background: $scroll_handle_hover; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 
-/* ========== 记录行 ========== */
+/* ===================== 任务记录 ===================== */
 QLabel[cssClass="taskTitle"] { color: $ink; font-size: 13px; font-weight: 700; background: transparent; }
-QLabel[cssClass="taskMeta"], QLabel[cssClass="taskDetail"] { color: $ink2; font-size: 11px; background: transparent; }
-/* 失败：用红色文字与一句完整的话说明原因 */
-QLabel[cssClass="taskError"] { color: $danger; font-size: 11px; background: transparent; }
-QFrame[cssClass="record"] { background: $panel; border: none; }
-QFrame[cssClass="record"]:hover { background: $chip; }
+QLabel[cssClass="taskMeta"], QLabel[cssClass="taskDetail"] { color: $ink2; font-size: 12px; background: transparent; }
+QLabel[cssClass="taskError"] { color: $danger; font-size: 12px; background: transparent; }
+QFrame[cssClass="record"] { background: $panel; border: none; border-radius: 8px; }
+QFrame[cssClass="record"]:hover { background: $surface_subtle; }
 
-/* ========== 其他 ========== */
-QLabel[muted="true"] { color: $ink3; font-size: 11px; background: transparent; }
+/* ===================== 杂项标签 ===================== */
+QLabel[muted="true"] { color: $ink3; font-size: 12px; background: transparent; }
 QLabel[sectionHeader="true"] { color: $ink; font-size: 13px; font-weight: 800; background: transparent; }
-QLabel[cssClass="eyebrow"] { color: $ink2; font-size: 10px; font-weight: 600; background: transparent; }
-QLabel[cssClass="emptyTitle"] { color: $ink; font-size: 15px; font-weight: 800; background: transparent; }
-QLabel[cssClass="emptyHint"] { color: $ink2; font-size: 12px; background: transparent; }
+QLabel[cssClass="eyebrow"] { color: $ink3; font-size: 12px; font-weight: 600; background: transparent; }
+QLabel[cssClass="emptyTitle"] { color: $ink; font-size: 18px; font-weight: 800; background: transparent; }
+QLabel[cssClass="emptyHint"] { color: $ink2; font-size: 13px; background: transparent; }
+QLabel[cssClass="alertText"] { color: $danger; font-size: 12px; background: transparent; }
 
-/* 出错与提醒：红色文字，白色底 */
-QLabel[cssClass="alertText"] { color: $danger; font-size: 11px; background: transparent; }
-
-/* ========== 空状态（纯白底，文字不受纹理干扰） ========== */
+/* ===================== 空状态：无边框，落在纯白底上，留白充足 ===================== */
 QFrame#emptyState {
-    background: #FFFFFF !important;
-    border: 1px solid $rule;
-    border-radius: 0px;
+    background: $paper !important;
+    border: none; border-radius: 0px;
 }
 
-/* ========== 提示条 ========== */
+/* ===================== 提示条 ===================== */
 QFrame#ffmpegNotice {
-    background: $panel;
-    border: 1px solid $ink;
-    border-radius: 0px;
+    background: $warning_tint; border: none; border-left: 3px solid $warning; border-radius: 8px;
 }
-QLabel#ffmpegNoticeText { color: $ink; font-size: 12px; background: transparent; }
+QLabel#ffmpegNoticeText { color: $ink; font-size: 13px; background: transparent; }
 QLabel[cssClass="flag"] {
-    background: $chip; color: $ink2;
-    font-size: 10px; font-weight: 700;
-    padding: 1px 6px; border: none; border-radius: 0px;
+    background: $warning_tint; color: $warning;
+    font-size: 12px; font-weight: 700;
+    padding: 2px 8px; border: none; border-radius: 6px;
 }
 
-/* ========== 媒体控制条 ========== */
+/* ===================== 媒体控制条 ===================== */
 QWidget#mediaBar { background: $media_surface; }
-
-/* ========== 悬停低清小窗 ========== */
-HoverPreview { background: $media_surface; border: 1px solid $media_groove; }
+HoverPreview { background: $media_surface; border: 1px solid $rule_strong; border-radius: 10px; }
 QFrame#hoverCaption {
-    background: $command_bar; border: none;
-    border-bottom: 1px solid $media_groove; border-radius: 0px;
+    background: $command_bar; border: none; border-bottom: 1px solid $media_groove; border-radius: 0px;
 }
-QLabel#hoverTitle { color: $media_text; font-size: 11px; background: transparent; }
+QLabel#hoverTitle { color: $media_text; font-size: 12px; background: transparent; }
 QLabel#hoverBadge {
     background: $signal; color: $on_signal;
-    padding: 1px 7px; font-size: 10px; font-weight: 700; border-radius: 0px;
+    padding: 2px 8px; font-size: 12px; font-weight: 700; border-radius: 6px;
 }
-QLabel#hoverDot { background: $signal; border: none; border-radius: 0px; }
-QLabel#hoverMsg { color: $media_text; font-size: 12px; background: transparent; }
+QLabel#hoverDot { background: $signal; border: none; border-radius: 999px; }
+QLabel#hoverMsg { color: $media_text; font-size: 13px; background: transparent; }
 QVideoWidget#hoverVideo { background: $media_surface; }
 QPushButton#mediaPlay {
     background: $signal; color: $on_signal;
-    border: none; border-radius: 0px;
-    padding: 5px 18px; font-size: 12px; font-weight: 700;
+    border: none; border-radius: 8px; padding: 6px 18px; font-size: 13px; font-weight: 700;
 }
-/* 媒体按钮三态使用白色表面与浅灰状态底 */
-QPushButton#mediaPlay:hover { background: $chip_hover; color: $ink; }
-QPushButton#mediaPlay:pressed { background: $chip_press; color: $ink; }
+QPushButton#mediaPlay:hover { background: $signal_hover; }
+QPushButton#mediaPlay:pressed { background: $signal_press; }
 QPushButton#mediaPlay:disabled { background: $input_disabled; color: $disabled_text; }
-/* 进度轨道：已播=蓝色，未播=浅灰 */
 QSlider#mediaSlider { background: transparent; }
-QSlider#mediaSlider::groove:horizontal {
-    height: 4px; background: $media_groove; border: none; border-radius: 0px;
-}
-QSlider#mediaSlider::sub-page:horizontal { background: $signal; border-radius: 0px; }
-QSlider#mediaSlider::add-page:horizontal { background: $media_groove; border-radius: 0px; }
+QSlider#mediaSlider::groove:horizontal { height: 4px; background: $media_groove; border: none; border-radius: 999px; }
+QSlider#mediaSlider::sub-page:horizontal { background: $signal; border-radius: 999px; }
+QSlider#mediaSlider::add-page:horizontal { background: $media_groove; border-radius: 999px; }
 QSlider#mediaSlider::handle:horizontal {
     width: 10px; height: 16px; margin: -6px 0px;
-    background: $media_text; border: none; border-radius: 0px;
+    background: $media_text; border: none; border-radius: 4px;
 }
 QSlider#mediaSlider::handle:horizontal:hover { background: $signal; }
-QLabel#mediaTime {
-    color: $media_text; font-size: 11px; background: transparent;
-    font-family: $mono_family; min-width: 96px;
-}
+QLabel#mediaTime { color: $media_text; font-size: 12px; background: transparent;
+    font-family: $mono_family; min-width: 96px; }
 
-/* ========== 模式切换 ========== */
+/* ===================== 分段按钮 ===================== */
 QPushButton[segment="true"] {
     background: transparent; color: $ink2;
-    border: 1px solid $rule_strong; border-radius: 0px;
-    padding: 5px 12px; font-size: 11px; font-weight: 600;
+    border: 1px solid $rule_strong; border-radius: 8px;
+    padding: 6px 12px; font-size: 12px; font-weight: 600;
 }
 QPushButton[segment="true"]:hover { background: $chip; color: $ink; }
 QPushButton[segment="true"]:checked {
-    background: $chrome_active; color: $ink; border: 1px solid $rule_strong; font-weight: 700;
+    background: $signal_soft; color: $signal; border: 1px solid $signal_tint; font-weight: 700;
 }
 
-/* ========== 看板大数字 ========== */
-QLabel[cssClass="figureValue"] { color: $ink; font-size: 34px; font-weight: 800; background: transparent; }
-QLabel[cssClass="figureValue"][marked="true"] { color: $ink; background: transparent; }
-QLabel[cssClass="figureLabel"] { color: $ink2; font-size: 11px; background: transparent; }
+/* ===================== 统计数字 ===================== */
+QLabel[cssClass="figureValue"] { color: $ink; font-size: 30px; font-weight: 800; background: transparent; }
+QLabel[cssClass="figureValue"][marked="true"] { color: $signal; background: transparent; }
+QLabel[cssClass="figureLabel"] { color: $ink2; font-size: 12px; background: transparent; }
 
-/* 无边框的普通容器 */
 QFrame[cssClass="plain"], QWidget[cssClass="plain"] { background: transparent; border: none; }
 """)
 

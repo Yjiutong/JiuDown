@@ -567,8 +567,8 @@ class MainWindow(QMainWindow):
         # ---- 右侧内容区 ----
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(28, 16, 28, 20)
-        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(32, 24, 32, 24)
+        content_layout.setSpacing(24)
 
         header_row = QHBoxLayout()
         header_row.setSpacing(12)

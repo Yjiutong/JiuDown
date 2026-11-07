@@ -212,9 +212,9 @@ class ActionButton(QPushButton):
         if not self.isEnabled():
             return C["disabled_fill"], C["disabled_text"], C["disabled_fill"]
         if self._kind == "danger":
-            return C["chip"], C["danger"], C["danger_tint"]
+            return C["danger_tint"], C["danger"], C["danger_tint"]
         if self._kind in ("primary", "cta"):
-            return C["signal"], C["on_signal"], C["signal"]
+            return C["signal"], C["on_signal"], C["signal_hover"]
         if self._kind == "ghost":
             return "transparent", C["ink"], C["chip"]
         return C["chip"], C["ink"], C["chip_hover"]
@@ -225,30 +225,34 @@ class ActionButton(QPushButton):
         fill, fg, _hover = self._colors()
         rect = self.rect()
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         if fill != "transparent":
-            painter.fillRect(rect, QColor(fill))
-        # 文字：统一颜色
+            # 极浅实色短投影：扁平设计里的层次，不用模糊阴影
+            shadow = rect.adjusted(0, 2, 0, 2)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(C["shadow_direct"]))
+            painter.drawRoundedRect(shadow, 8, 8)
+            painter.setBrush(QColor(fill))
+            painter.drawRoundedRect(rect.adjusted(0, 0, 0, -2), 8, 8)
+
         font = self._text_font()
         painter.setFont(font)
         align = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
         pad = self._left_pad()
-        box = QRect(pad, 0, rect.width() - pad - 8, rect.height())
+        box = QRect(pad, 0, rect.width() - pad - 8, rect.height() - 2)
         painter.setPen(QColor(fg))
         painter.drawText(box, align, self.text())
 
         if self.hasFocus():
-            # 键盘焦点：1px 蓝色边框
             painter.setPen(QPen(QColor(C["signal"]), 1))
-            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+            painter.drawRoundedRect(rect.adjusted(0, 0, -1, -3), 8, 8)
 
     def _text_font(self) -> QFont:
         font = QFont(self.font())
-        font.setPointSizeF(9.5 if self._small else (10.5 if self._kind == "cta" else 9.5))
-        font.setWeight(QFont.Weight.Black if self._kind == "cta"
-                       else QFont.Weight.Bold if self._kind in ("primary", "danger")
+        font.setPointSizeF(9.5)
+        font.setWeight(QFont.Weight.Bold if self._kind in ("cta", "primary", "danger")
                        else QFont.Weight.DemiBold)
         return font
 
@@ -258,11 +262,11 @@ class ActionButton(QPushButton):
     def sizeHint(self) -> QSize:
         font = self._text_font()
         advance = QFontMetrics(font).horizontalAdvance(self.text() or " ")
-        height = 28 if self._small else (38 if self._kind == "cta" else 32)
+        height = 28 if self._small else (36 if self._kind == "cta" else 32)
         width = advance + self._left_pad() + 14
         if self._kind == "cta":
-            width = max(width, 112)
-        return QSize(width, height)
+            width = max(width, 104)
+        return QSize(width, height + 2)
 
     def refresh_theme(self) -> None:
         self.update()
